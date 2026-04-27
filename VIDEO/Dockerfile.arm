@@ -1,0 +1,213 @@
+# 使用PyTorch ARM架构构建器镜像作为基础镜像
+# 注意：manylinuxaarch64-builder 是基于 CentOS 的构建器镜像
+# 如果 cuda12.9 版本不存在，可以尝试 cuda12.8 或其他可用版本
+FROM pytorch/manylinuxaarch64-builder:cuda12.9 AS base
+
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai \
+    CUDA_VISIBLE_DEVICES=0 \
+    QT_QPA_PLATFORM=xcb \
+    QT_X11_NO_MITSHM=1 \
+    PATH=/opt/python/cp311-cp311/bin:/opt/python/cp310-cp310/bin:$PATH
+
+# 设置工作目录
+WORKDIR /app
+
+# ======================= 第一阶段：系统依赖安装 =======================
+FROM base AS dependencies
+
+# 复制本地 ffmpeg 文件（如果存在，优先使用本地文件）
+# 注意：如果文件不存在，构建脚本会创建一个空占位符文件以避免构建失败
+# Dockerfile 会在 RUN 命令中检查文件大小，如果文件为空或很小则跳过使用
+COPY ffmpeg-master-latest-linuxarm64-gpl.tar.xz* /tmp/
+
+# manylinuxaarch64-builder 基于 CentOS，使用 yum 包管理器
+# 安装系统依赖包（包含视频处理所需的ffmpeg和相关库）
+RUN set -ex && \
+    # 安装基础工具和开发工具
+    yum install -y \
+        ca-certificates \
+        curl \
+        wget \
+        git \
+        vim \
+        htop \
+        gnupg2 \
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
+        which \
+        file \
+        && \
+    # 安装图形库和视频处理库
+    yum install -y \
+        mesa-libGL \
+        mesa-libGL-devel \
+        glib2 \
+        glib2-devel \
+        python3-devel \
+        libusb \
+        libSM \
+        libgomp \
+        gtk3 \
+        mesa-dri-drivers \
+        libX11 \
+        libXext \
+        libXrender \
+        libxcb \
+        libxcb-devel \
+        libXinerama \
+        && \
+    # 安装 ffmpeg 和相关库
+    # 注意：CentOS/RHEL 8+ 中 ffmpeg 不在 EPEL，需要从其他源安装
+    yum install -y \
+        epel-release \
+        && \
+    # 尝试从 EPEL 安装 ffmpeg（CentOS 7 可能可以，CentOS 8+ 会失败）
+    if yum install -y ffmpeg ffmpeg-devel 2>/dev/null; then \
+        echo "ffmpeg 已从 EPEL 仓库安装"; \
+    else \
+        echo "ffmpeg 不在 EPEL 仓库中，使用预编译静态二进制文件安装（官方推荐方法）..." && \
+        # 使用预编译静态二进制文件（静态二进制文件是自包含的，不需要额外的依赖库）
+        cd /tmp && \
+        # 优先检查本地是否有 ffmpeg 文件（从构建上下文复制）
+        # 检查文件是否存在且大小大于 1MB（避免使用占位符文件）
+        if [ -f "ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ] && [ $(stat -f%z "ffmpeg-master-latest-linuxarm64-gpl.tar.xz" 2>/dev/null || stat -c%s "ffmpeg-master-latest-linuxarm64-gpl.tar.xz" 2>/dev/null || echo 0) -gt 1048576 ]; then \
+            echo "使用本地 ffmpeg 文件（从构建上下文）..." && \
+            tar -xf ffmpeg-master-latest-linuxarm64-gpl.tar.xz && \
+            cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffmpeg /usr/local/bin/ && \
+            cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffprobe /usr/local/bin/ && \
+            chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+            rm -rf /tmp/ffmpeg-* && \
+            echo "ffmpeg 已从本地文件安装"; \
+        # 如果本地文件不存在，尝试从 GitHub BtbN/FFmpeg-Builds 下载 ARM64 版本（支持 ARM64）
+        elif wget -q --spider "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" 2>/dev/null; then \
+            echo "从 GitHub BtbN/FFmpeg-Builds 下载 ARM64 版本..." && \
+            wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" && \
+            tar -xf ffmpeg-master-latest-linuxarm64-gpl.tar.xz && \
+            cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffmpeg /usr/local/bin/ && \
+            cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffprobe /usr/local/bin/ && \
+            chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+            rm -rf /tmp/ffmpeg-* && \
+            echo "ffmpeg 已从 GitHub BtbN/FFmpeg-Builds 安装"; \
+        # 备用方案：尝试从 johnvansickle.com 下载（如果有 ARM64 版本）
+        elif wget -q --spider "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" 2>/dev/null; then \
+            echo "从 johnvansickle.com 下载 ARM64 静态二进制文件..." && \
+            wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" && \
+            tar -xf ffmpeg-release-arm64-static.tar.xz && \
+            cp ffmpeg-*-static/ffmpeg /usr/local/bin/ && \
+            cp ffmpeg-*-static/ffprobe /usr/local/bin/ && \
+            chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+            rm -rf /tmp/ffmpeg-* && \
+            echo "ffmpeg 已从 johnvansickle.com 安装"; \
+        else \
+            echo "预编译版本不可用，使用简化配置从源码编译（不启用所有编解码器）..." && \
+            yum install -y nasm yasm && \
+            wget -q https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.bz2 && \
+            tar -xjf ffmpeg-6.1.1.tar.bz2 && \
+            cd ffmpeg-6.1.1 && \
+            ./configure \
+                --prefix=/usr/local \
+                --enable-gpl \
+                --enable-version3 \
+                --enable-shared \
+                --disable-static \
+                --enable-pic \
+                && \
+            make -j$(nproc) && \
+            make install && \
+            ldconfig && \
+            cd / && \
+            rm -rf /tmp/ffmpeg-6.1.1* && \
+            echo "ffmpeg 已从源码编译安装（简化配置）"; \
+        fi; \
+    fi \
+        && \
+    # 清理缓存
+    yum clean all && \
+    rm -rf /var/cache/yum
+
+# 配置时区
+RUN set -ex && \
+    ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
+
+# ======================= 第二阶段：Python环境配置 =======================
+FROM dependencies AS python-env
+
+# 确保使用正确的 Python 版本（manylinuxaarch64-builder 通常包含多个 Python 版本）
+# 优先使用 Python 3.11，如果没有则使用 Python 3.10，最后使用系统 Python
+RUN set -ex && \
+    if [ -d /opt/python/cp311-cp311 ]; then \
+        echo "使用 Python 3.11" && \
+        ln -sf /opt/python/cp311-cp311/bin/python3.11 /usr/local/bin/python3 && \
+        ln -sf /opt/python/cp311-cp311/bin/pip3.11 /usr/local/bin/pip3 && \
+        ln -sf /opt/python/cp311-cp311/bin/python3.11 /usr/local/bin/python; \
+    elif [ -d /opt/python/cp310-cp310 ]; then \
+        echo "使用 Python 3.10" && \
+        ln -sf /opt/python/cp310-cp310/bin/python3.10 /usr/local/bin/python3 && \
+        ln -sf /opt/python/cp310-cp310/bin/pip3.10 /usr/local/bin/pip3 && \
+        ln -sf /opt/python/cp310-cp310/bin/python3.10 /usr/local/bin/python; \
+    else \
+        echo "使用系统 Python" && \
+        yum install -y python3 python3-pip && \
+        yum clean all && \
+        ln -sf /usr/bin/python3 /usr/local/bin/python3 && \
+        ln -sf /usr/bin/pip3 /usr/local/bin/pip3 && \
+        ln -sf /usr/bin/python3 /usr/local/bin/python; \
+    fi && \
+    python3 --version && \
+    pip3 --version && \
+    python --version
+
+# ======================= 第三阶段：Python依赖安装 =======================
+FROM python-env AS python-deps
+
+# 复制requirements文件（利用Docker缓存层）
+COPY requirements.txt .
+
+# 升级 pip 并安装 Python 依赖
+RUN set -ex && \
+    pip3 install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip3 install -r requirements.txt --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# ======================= 第四阶段：应用部署 =======================
+FROM python-deps AS runtime
+
+# 复制项目源码
+COPY . .
+
+# 创建必要的目录结构
+RUN set -ex && \
+    mkdir -p \
+        data/uploads \
+        data/datasets \
+        data/models \
+        data/inference_results \
+        temp_uploads \
+        static/models && \
+    # 设置执行权限
+    chmod +x run.py
+
+# 创建非root用户和权限设置
+RUN set -ex && \
+    groupadd -r appuser && \
+    useradd -r -m -g appuser appuser && \
+    mkdir -p /home/appuser/.paddlex/temp /home/appuser/.config/Ultralytics && \
+    chown -R appuser:appuser /app /home/appuser
+
+# 切换到非root用户
+USER appuser
+
+# 暴露端口
+EXPOSE 6000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -fs http://localhost:6000/actuator/health > /dev/null || exit 1
+
+# 启动命令
+CMD ["python3", "run.py"]
+

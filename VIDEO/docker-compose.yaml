@@ -1,0 +1,124 @@
+services:
+  video-service:
+    image: video-service:latest
+    container_name: video-service
+    user: root
+    runtime: nvidia
+
+    # 环境变量文件（用于Docker部署）
+    env_file:
+      - .env.docker
+
+    # 网络模式：使用host模式以访问宿主机局域网（ONVIF发现需要）
+    # 注意：使用host模式后，端口映射将失效，服务直接使用宿主机网络
+    network_mode: host
+
+    # 数据卷挂载
+    volumes:
+      # 数据目录（包含数据集、模型、推理结果、上传文件）
+      - ./data:/app/data
+      # 静态文件目录
+      - ./static:/app/static
+      # 临时上传目录
+      - ./temp_uploads:/app/temp_uploads
+      # 模型文件目录（如果存在）
+      - ./model:/app/model
+      # 告警图片目录（与iot-sink服务共享，用于大模型实时分析等服务的图片上传）
+      - ./alert_images:/app/alert_images
+      # SRS录像目录（与SRS服务共享，用于访问SRS生成的录像文件）
+      # 重要说明：
+      # 1. SRS的docker-compose中挂载的是 /data:/data:rw（宿主机路径为 /data）
+      # 2. SRS录像实际存储在 /data/playbacks 目录下（由SRS配置的dvr_path决定）
+      # 3. 这里挂载相同的宿主机路径 /data 到容器的 /data，确保VIDEO服务可以访问SRS生成的录像文件
+      # 4. 在容器内，SRS录像文件位于 /data/playbacks/live/{device_id}/YYYY/MM/DD/*.flv
+      # 5. 应用数据目录在 /app/data，SRS录像目录在 /data，两者是不同的挂载点
+      - /data:/data:rw
+      # 环境变量配置文件（用于Docker部署，使用.env.docker）
+      - ./.env.docker:/app/.env:ro
+
+    # 环境变量
+    environment:
+      # Python环境
+      - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
+      # Flask配置
+      - FLASK_RUN_PORT=${FLASK_RUN_PORT:-6000}
+      - FLASK_RUN_HOST=${FLASK_RUN_HOST:-0.0.0.0}
+      - DEBUG=${DEBUG:-False}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-[*]}
+      # 数据库配置（使用localhost，因为使用host网络模式，中间件端口已映射到宿主机）
+      - DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-edge-video20
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-please-change-this-to-a-random-string}
+      # Pod IP配置（容器内会自动获取，也可手动指定）
+      - POD_IP=${POD_IP:-}
+      # 本地对象存储根目录
+      - LOCAL_STORAGE_ROOT=${LOCAL_STORAGE_ROOT:-/app/data/local_storage}
+      - RECORD_ARCHIVE_BUCKET=${RECORD_ARCHIVE_BUCKET:-record-archive}
+      - SNAP_ARCHIVE_BUCKET=${SNAP_ARCHIVE_BUCKET:-snap-archive}
+      # Redis配置（使用localhost，因为使用host网络模式）
+      - REDIS_HOST=${REDIS_HOST:-localhost}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-basiclab@iot975248395}
+      # Kafka配置（使用宿主机IP或localhost，因为使用host网络模式，不能使用容器名）
+      # 如果Kafka运行在宿主机上，使用localhost:9092
+      # 如果Kafka运行在其他机器上，使用宿主机IP，例如：192.168.1.100:9092
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      # TDengine配置（使用localhost，因为使用host网络模式）
+      - TDENGINE_HOST=${TDENGINE_HOST:-localhost}
+      - TDENGINE_PORT=${TDENGINE_PORT:-6030}
+      # 视频服务特有配置
+      - MODEL_AI_PUSH_URL=${MODEL_AI_PUSH_URL:-pro.basiclab.top:1935}
+      - CAMERA_ONLINE_INTERVAL=${CAMERA_ONLINE_INTERVAL:-10}
+      - CAMERA_DISCOVER_INTERVAL=${CAMERA_DISCOVER_INTERVAL:-60}
+      # ONVIF配置（可选）
+      - ONVIF_WSDL_DIR=${ONVIF_WSDL_DIR:-/etc/onvif/wsdl}
+      # 时区配置
+      - TZ=${TZ:-Asia/Shanghai}
+      # 代理配置（可选）
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
+      # GPU配置
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    # 注意：使用host网络模式时，不需要配置extra_hosts
+    # 容器直接使用宿主机网络栈，Kafka配置应使用宿主机IP或localhost，不能使用容器名
+    # 如果Kafka运行在宿主机上，使用localhost:9092
+    # 如果Kafka运行在其他机器上，使用宿主机IP，例如：192.168.1.100:9092
+    # extra_hosts:
+    #   - "kafka-server:host-gateway"
+
+    # 重启策略
+    restart: unless-stopped
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6000/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+    # 注意：使用network_mode: host后，不再需要networks配置
+    # 容器将直接使用宿主机的网络栈，可以：
+    # 1. 访问宿主机局域网（用于ONVIF摄像头发现）
+    # 2. 通过localhost访问映射到宿主机的中间件服务端口
+    # 3. 确保中间件服务（PostgresSQL 等）的端口已映射到宿主机
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 注意：使用network_mode: host后，不再需要networks配置
+# 如果需要同时访问容器网络和宿主机网络，可以考虑以下替代方案：
+# 1. 使用macvlan网络（需要root权限）
+# 2. 使用host网络 + 通过IP访问中间件容器
+# 3. 使用sidecar容器模式
