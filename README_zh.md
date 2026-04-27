@@ -1,12 +1,12 @@
-# EasyAIoT Edge（边缘智能算法应用平台）
+# EasyAIoT Edge（异构边缘算力平台）
 
 [![Gitee star](https://gitee.com/volara/easyaiot-edge/badge/star.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/stargazers)
 [![Gitee fork](https://gitee.com/volara/easyaiot-edge/badge/fork.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/members)
 
-**一个平台，覆盖主流边缘算力——不换业务，只换芯片。**
+## 一个平台，覆盖主流边缘算力——不换业务，只换芯片。
 
 <p style="font-size: 16px; line-height: 1.8; color: #555; font-weight: 400; margin: 20px 0;">
-  EasyAIoT Edge 是一套完全开源的边缘智能算法应用平台，在同一套操作习惯、数据链路和运维体系下，同时支持**华为昇腾、NVIDIA Jetson、瑞芯微 RK3588、算能 BM1688 以及海光/Intel/AMD x86**等异构边缘算力。平台覆盖摄像头接入、算法任务编排、推理、告警、录像、IoT 采集与规则引擎的全链路，采用 MIT 协议，无厂商锁定风险。
+  <strong> EasyAIoT Edge 是一套完全开源的边缘智能算法应用平台，在同一套操作习惯、数据链路和运维体系下，同时支持**华为昇腾、NVIDIA Jetson、瑞芯微 RK3588、算能 BM1688 以及海光/Intel/AMD x86**等异构边缘算力。平台覆盖摄像头接入、算法任务编排、推理、告警、录像、IoT 采集与规则引擎的全链路，采用 MIT 协议，无厂商锁定风险。</strong>
 </p>
 
 <div align="center">
