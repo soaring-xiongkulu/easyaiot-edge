@@ -3,7 +3,7 @@
 [![Gitee star](https://gitee.com/volara/easyaiot-edge/badge/star.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/stargazers)
 [![Gitee fork](https://gitee.com/volara/easyaiot-edge/badge/fork.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/members)
 
-### One platform, covering mainstream edge computing power – switch the chip, not the business.
+### One platform, covering mainstream edge computing power – switch the chip, not the business
 
 <p style="font-size: 16px; line-height: 1.8; color: #555; font-weight: 400; margin: 20px 0;">
   EasyAIoT Edge is a fully open-source Heterogeneous Edge Computing Platform. Under a unified set of operation habits, data links, and O&M systems, <strong>it simultaneously supports heterogeneous edge computing power such as Huawei Ascend, NVIDIA Jetson, Rockchip RK3588, Sophon BM1688, and Hygon/Intel/AMD x86</strong>. The platform covers the full chain of camera access, algorithm task orchestration, inference, alarming, recording, IoT acquisition, and rule engine. It adopts the MIT license, with no risk of vendor lock-in.
