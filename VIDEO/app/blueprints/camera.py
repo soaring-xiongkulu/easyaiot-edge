@@ -1,0 +1,2040 @@
+"""
+@author 翱翔的雄库鲁
+@email andywebjava@163.com
+@wechat EasyAIoT2025
+"""
+import datetime
+import io
+import logging
+import os
+import subprocess
+import threading
+import time
+import uuid
+from datetime import timezone, timedelta
+from operator import or_
+from typing import Optional
+
+import cv2
+import numpy as np
+import requests
+from flask import Blueprint, current_app, request, jsonify
+from urllib.parse import quote
+
+from app.services.local_bucket_client import StorageObjectError
+
+from app.services.camera_service import *
+from app.services.camera_service import (
+    register_camera, register_camera_by_onvif, get_camera_info, update_camera, delete_camera,
+    search_camera,
+    get_snapshot_uri, refresh_camera, _to_dict
+)
+import app.services.camera_service as camera_service
+from models import Device, db, Image, DeviceDirectory, DetectionRegion, StreamForwardTask, AlgorithmTask
+from sqlalchemy import and_
+
+camera_bp = Blueprint('camera', __name__)
+logger = logging.getLogger(__name__)
+
+# 全局变量管理截图任务状态
+rtsp_tasks = {}
+onvif_tasks = {}
+
+# 全局进程管理
+ffmpeg_processes = {}
+ffmpeg_lock = threading.Lock()
+
+
+class FFmpegDaemon:
+    """FFmpeg进程守护线程（支持自动重启）"""
+
+    def __init__(self, device_id):
+        self.device_id = device_id
+        self.process = None
+        self._running = True
+        self._restart_flag = False
+        self.start_daemon()
+
+    def start_daemon(self):
+        device = Device.query.get(self.device_id)
+
+        def daemon_task():
+            while self._running:
+                # 关键修复：移除路径引号
+                ffmpeg_cmd = [
+                    'ffmpeg',
+                    '-rtsp_transport', 'tcp',
+                    '-i', device.source,  # 直接使用路径
+                    '-an',  # 禁用音频
+                    '-c:v', 'libx264',
+                    '-b:v', '512k',
+                    '-f', 'flv',
+                    f'{device.rtmp_stream}'
+                ]
+
+                # 启动进程并捕获错误流
+                self.process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stderr=subprocess.PIPE,  # 关键：捕获错误日志
+                    stdin=subprocess.PIPE,
+                    text=False
+                )
+                logger.info(f"启动FFmpeg: {' '.join(ffmpeg_cmd)}")
+
+                # 实时监控输出（仅记录错误和警告）
+                while self._running:
+                    line = self.process.stderr.readline()
+                    if not line:
+                        break
+                    line_str = line.decode().strip()
+                    # 只记录错误和警告信息
+                    if 'error' in line_str.lower() or 'warning' in line_str.lower() or 'failed' in line_str.lower():
+                        logger.warning(f"[FFmpeg:{self.device_id}] {line_str}")
+
+                # 进程结束后处理
+                return_code = self.process.wait()
+                if return_code != 0:
+                    logger.error(f"FFmpeg异常退出，返回码: {return_code}，设备: {self.device_id}")
+
+                # 按需重启
+                if not self._running:
+                    return
+                if self._restart_flag:
+                    self._restart_flag = False
+                    logger.info(f"设备 {self.device_id} 配置更新，立即重启")
+                else:
+                    logger.warning(f"设备 {self.device_id} 进程异常，10秒后重启...")
+                    time.sleep(10)  # 等待后重启
+
+        threading.Thread(target=daemon_task, daemon=True).start()
+
+    def restart(self):
+        self._restart_flag = True
+        if self.process:
+            self.process.terminate()
+
+    def stop(self):
+        self._running = False
+        if self.process:
+            self.process.terminate()
+
+
+# ------------------------- 自动启动函数 -------------------------
+def auto_start_streaming():
+    """应用启动时自动启动需要推流的设备[1](@ref)"""
+    try:
+        devices = Device.query.filter_by(enable_forward=True).all()
+        for device in devices:
+            # 如果摄像头地址是 rtmp，则不启动推送
+            if device.source and device.source.strip().lower().startswith('rtmp://'):
+                logger.info(f"设备 {device.id} 的源地址是 RTMP，跳过推送启动")
+                continue
+            
+            # 如果设备离线，则不启动推送
+            if not camera_service._monitor.is_online(device.id):
+                logger.info(f"设备 {device.id} 处于离线状态，跳过推送启动")
+                continue
+            
+            with ffmpeg_lock:
+                # 跳过已运行的进程
+                if device.id in ffmpeg_processes:
+                    daemon = ffmpeg_processes[device.id]
+                    if daemon._running:
+                        logger.info(f"设备 {device.id} 的流媒体转发已在运行中")
+                        continue
+
+                # 创建并启动守护线程
+                ffmpeg_processes[device.id] = FFmpegDaemon(device.id)
+                logger.info(f"设备 {device.id} 的流媒体转发已自动启动")
+
+    except Exception as e:
+        logger.error(f"自动启动流媒体转发失败: {str(e)}", exc_info=True)
+
+
+# ------------------------- 接口实现 -------------------------
+@camera_bp.route('/device/<string:device_id>/stream/start', methods=['POST'])
+def start_ffmpeg_stream(device_id):
+    try:
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'code': 400, 'msg': f'设备不存在: ID={device_id}'}), 400
+        
+        # 如果摄像头地址是 rtmp，则不启动推送
+        if device.source and device.source.strip().lower().startswith('rtmp://'):
+            return jsonify({
+                'code': 400,
+                'msg': '摄像头源地址是 RTMP，不支持推送功能'
+            }), 400
+        
+        # 如果设备离线，则不启动推送
+        if not camera_service._monitor.is_online(device_id):
+            return jsonify({
+                'code': 400,
+                'msg': '设备处于离线状态，无法启动推送'
+            }), 400
+        
+        with ffmpeg_lock:
+            if device_id in ffmpeg_processes:
+                daemon = ffmpeg_processes[device_id]
+                if daemon._running:
+                    return jsonify({'code': 400, 'msg': '转码任务已在运行'}), 400
+                daemon.stop()
+
+            # 启动新进程并更新数据库
+            ffmpeg_processes[device_id] = FFmpegDaemon(device_id)
+            device.enable_forward = True
+            db.session.commit()
+
+        return jsonify({
+            'code': 0,
+            'msg': '流媒体转发已启动',
+            'data': {'rtmp_url': device.rtmp_stream}
+        })
+    except Exception as e:
+        logger.error(f"启动失败: {str(e)}", exc_info=True)
+        return jsonify({'code': 500, 'msg': f'启动失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<string:device_id>/stream/stop', methods=['POST'])
+def stop_ffmpeg_stream(device_id):
+    try:
+        with ffmpeg_lock:
+            if device_id in ffmpeg_processes:
+                ffmpeg_processes[device_id].stop()
+                del ffmpeg_processes[device_id]
+
+            device = Device.query.get(device_id)
+            if device:
+                device.enable_forward = False
+                db.session.commit()
+
+        return jsonify({'code': 0, 'msg': '转码已停止'})
+    except Exception as e:
+        logger.error(f"停止失败: {str(e)}", exc_info=True)
+        return jsonify({'code': 500, 'msg': f'停止失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<string:device_id>/stream/status', methods=['GET'])
+def get_stream_status(device_id):
+    """获取FFmpeg转发状态"""
+    try:
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'code': 400, 'msg': f'设备 {device_id} 不存在'}), 400
+
+        status = 'stopped'
+        pid = None
+        start_time = None
+        rtmp_url = device.rtmp_stream if device.rtmp_stream else None
+
+        with ffmpeg_lock:
+            if device_id in ffmpeg_processes:
+                daemon = ffmpeg_processes[device_id]
+                if daemon._running and daemon.process:
+                    # 检查进程是否还在运行
+                    if daemon.process.poll() is None:  # None表示进程仍在运行
+                        status = 'running'
+                        pid = daemon.process.pid
+                    else:
+                        # 进程已退出，但daemon可能还在运行（等待重启）
+                        status = 'stopped'
+                else:
+                    status = 'stopped'
+            else:
+                # 没有在ffmpeg_processes中，但检查数据库中的enable_forward状态
+                if device.enable_forward:
+                    # 数据库标记为启用，但进程不存在，可能是异常退出
+                    status = 'stopped'
+                else:
+                    status = 'stopped'
+
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': {
+                'status': status,
+                'rtmp_url': rtmp_url,
+                'enable_forward': device.enable_forward,
+                'pid': pid,
+                'start_time': start_time
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取流状态失败: {str(e)}", exc_info=True)
+        return jsonify({'code': 500, 'msg': f'获取流状态失败: {str(e)}'}), 500
+
+
+# ------------------------- 设备管理接口 -------------------------
+@camera_bp.route('/list', methods=['GET'])
+def list_devices():
+    """查询设备列表（支持分页和搜索）"""
+    try:
+        # 获取请求参数
+        page_no = int(request.args.get('pageNo', 1))
+        page_size = int(request.args.get('pageSize', 10))
+        search = request.args.get('search', '').strip()
+
+        # 参数验证
+        if page_no < 1 or page_size < 1:
+            return jsonify({'code': 400, 'msg': '参数错误：pageNo和pageSize必须为正整数'}), 400
+
+        # 构建基础查询
+        query = Device.query
+
+        # 添加搜索条件
+        if search:
+            search_pattern = f'%{search}%'
+            query = query.filter(
+                or_(
+                    Device.name.ilike(search_pattern),
+                    Device.model.ilike(search_pattern),
+                    Device.serial_number.ilike(search_pattern),
+                    Device.manufacturer.ilike(search_pattern),
+                    Device.ip.ilike(search_pattern)
+                )
+            )
+
+        # 按修改时间降序排序（新添加的设备排在前面）
+        query = query.order_by(Device.updated_at.desc())
+
+        # 执行分页查询
+        pagination = query.paginate(
+            page=page_no,
+            per_page=page_size,
+            error_out=False
+        )
+
+        # 确保当前页的设备都有对应的抓拍空间和录像空间
+        for device in pagination.items:
+            try:
+                camera_service.ensure_device_spaces(device.id)
+            except Exception as e:
+                logger.warning(f'检查设备 {device.id} 空间时出错: {str(e)}')
+
+        device_list = [_to_dict(device) for device in pagination.items]
+
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': device_list,
+            'total': pagination.total
+        })
+
+    except ValueError:
+        return jsonify({'code': 400, 'msg': '参数类型错误：pageNo和pageSize需为整数'}), 400
+    except Exception as e:
+        logger.error(f'设备列表查询失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/device/<string:device_id>', methods=['GET'])
+def get_device_info(device_id):
+    """获取单个设备详情"""
+    try:
+        info = get_camera_info(device_id)
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': info
+        })
+    except ValueError as e:
+        logger.error(f'获取设备详情失败: {str(e)}')
+        return jsonify({'code': 400, 'msg': f'设备 {device_id} 不存在'}), 400
+    except Exception as e:
+        logger.error(f'获取设备详情失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/register/device', methods=['POST'])
+def register_device():
+    """注册新设备"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'msg': '请求数据不能为空'}), 400
+        
+        # 对于自定义设备，如果manufacturer或model为空，使用默认值
+        camera_type = data.get('cameraType', '')
+        if camera_type == 'custom':
+            manufacturer = data.get('manufacturer', '').strip() if data.get('manufacturer') else ''
+            model = data.get('model', '').strip() if data.get('model') else ''
+            if not manufacturer:
+                manufacturer = 'EasyAIoT'
+                data['manufacturer'] = manufacturer
+            if not model:
+                model = 'Camera-EasyAIoT'
+                data['model'] = model
+        
+        device_id = register_camera(data)
+        return jsonify({
+            'code': 0,
+            'msg': '设备注册成功',
+            'data': {'id': device_id}
+        })
+    except ValueError as e:
+        logger.error(f'注册新设备失败: {str(e)}')
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except RuntimeError as e:
+        logger.error(f'注册新设备失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@camera_bp.route('/register/device/onvif', methods=['POST'])
+def register_device_by_onvif():
+    """通过ONVIF搜索并自动注册摄像头"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'msg': '请求数据不能为空'}), 400
+        
+        ip = data.get('ip', '').strip()
+        port = data.get('port', 80)
+        password = data.get('password', '').strip()
+        
+        if not ip:
+            return jsonify({'code': 400, 'msg': '摄像头IP地址不能为空'}), 400
+        if not password:
+            return jsonify({'code': 400, 'msg': '摄像头密码不能为空'}), 400
+        
+        try:
+            port = int(port)
+        except (ValueError, TypeError):
+            return jsonify({'code': 400, 'msg': '摄像头端口必须是数字'}), 400
+        
+        device_id = register_camera_by_onvif(ip, port, password)
+        return jsonify({
+            'code': 0,
+            'msg': '设备注册成功',
+            'data': {'id': device_id}
+        })
+    except ValueError as e:
+        logger.error(f'ONVIF注册设备失败: {str(e)}')
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except RuntimeError as e:
+        logger.error(f'ONVIF注册设备失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+    except Exception as e:
+        logger.error(f'ONVIF注册设备失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'设备注册失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<string:device_id>', methods=['PUT'])
+def update_device(device_id):
+    """更新设备信息"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'msg': '请求数据不能为空'}), 400
+        
+        # 如果更新manufacturer或model字段为空，使用默认值
+        if 'manufacturer' in data:
+            manufacturer = data.get('manufacturer', '').strip() if data.get('manufacturer') else ''
+            if not manufacturer:
+                data['manufacturer'] = 'EasyAIoT'
+        if 'model' in data:
+            model = data.get('model', '').strip() if data.get('model') else ''
+            if not model:
+                data['model'] = 'Camera-EasyAIoT'
+        
+        update_camera(device_id, data)
+        return jsonify({
+            'code': 0,
+            'msg': '设备信息更新成功'
+        })
+    except ValueError as e:
+        logger.error(f'更新设备信息失败: {str(e)}')
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except RuntimeError as e:
+        logger.error(f'更新设备信息失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+    except Exception as e:
+        logger.error(f'更新设备信息失败（未知错误）: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'更新设备信息失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<string:device_id>', methods=['DELETE'])
+def delete_device(device_id):
+    """删除设备"""
+    try:
+        # 先停止可能的流媒体转发
+        if device_id in ffmpeg_processes and ffmpeg_processes[device_id]['process'] is not None:
+            process = ffmpeg_processes[device_id]['process']
+            if process.poll() is None:  # 进程仍在运行
+                stop_ffmpeg_stream(device_id)
+
+        delete_camera(device_id)
+        return jsonify({
+            'code': 0,
+            'msg': '设备删除成功'
+        })
+    except ValueError as e:
+        logger.error(f'删除设备失败: {str(e)}')
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except RuntimeError as e:
+        logger.error(f'删除设备失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+# ------------------------- PTZ控制接口 -------------------------
+@camera_bp.route('/device/<device_id>/ptz', methods=['POST'])
+def control_ptz(device_id: str):
+    """
+    处理PTZ控制请求
+    Args:
+        device_id: 设备标识符
+    Request Body:
+        {x: number, y: number, z: number} - PTZ移动向量
+    """
+    try:
+        # 解析请求数据
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        # 提取移动向量
+        x = data.get('x', 0.0)
+        y = data.get('y', 0.0)
+        z = data.get('z', 0.0)
+
+        # 验证参数类型
+        if not all(isinstance(v, (int, float)) for v in [x, y, z]):
+            return jsonify({'error': 'Invalid parameter types'}), 400
+
+        # 根据device_id获取相机实例
+        camera = get_camera_by_id(device_id)  # 您需要实现这个函数
+
+        if not camera:
+            return jsonify({'error': 'Camera not found'}), 400
+
+        # 执行PTZ移动
+        camera.move((x, y, z))
+
+        return jsonify({'success': True, 'message': 'PTZ command executed'})
+
+    except Exception as e:
+        logger.error(f"PTZ control error: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+def get_camera_by_id(device_id: str) -> Optional[OnvifCamera]:
+    """
+    根据设备ID获取OnvifCamera实例
+    """
+    try:
+        # 从数据库获取设备信息
+        device = Device.query.get(device_id)
+        if not device:
+            logger.error(f"设备 {device_id} 不存在")
+            return None
+
+        # 检查设备是否有必要的连接信息
+        if not all([device.ip, device.port, device.username, device.password]):
+            logger.error(f"设备 {device_id} 缺少连接信息")
+            return None
+
+        # 创建OnvifCamera实例
+        return OnvifCamera(
+            ip=device.ip,
+            port=device.port,
+            username=device.username,
+            password=device.password
+        )
+    except Exception as e:
+        logger.error(f"创建相机实例失败: {str(e)}")
+        return None
+
+
+# ------------------------- 本地存储上传（兼容原 URL 格式） -------------------------
+def get_minio_client():
+    """创建并返回本地存储客户端（兼容原 MinIO API）"""
+    from app.services.local_bucket_client import LocalBucketClient
+
+    return LocalBucketClient()
+
+
+def upload_screenshot_to_minio(camera_id, image_data, image_format="jpg"):
+    """上传摄像头截图到本地存储并存入数据库"""
+    try:
+        minio_client = get_minio_client()
+        bucket_name = "camera-screenshots"
+
+        if not minio_client.bucket_exists(bucket_name):
+            minio_client.make_bucket(bucket_name)
+            logger.info(f"创建截图存储桶: {bucket_name}")
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 生成唯一文件名
+        unique_filename = f"{uuid.uuid4().hex}.{image_format}"
+        object_name = f"{camera_id}/{unique_filename}"
+
+        success, encoded_image = cv2.imencode(f'.{image_format}', image_data)
+        if not success:
+            raise RuntimeError("图像编码失败")
+
+        # 获取图像尺寸
+        height, width = image_data.shape[:2]
+
+        image_bytes = encoded_image.tobytes()
+        minio_client.put_object(
+            bucket_name,
+            object_name,
+            io.BytesIO(image_bytes),
+            len(image_bytes),
+            content_type=f"image/{image_format}"
+        )
+
+        # 使用统一的URL格式
+        download_url = f"/api/v1/buckets/{bucket_name}/objects/download?prefix={object_name}"
+
+        # 将图片信息存入数据库
+        try:
+            image_record = Image(
+                filename=unique_filename,
+                original_filename=f"{camera_id}_{timestamp}.{image_format}",
+                path=download_url,
+                width=width,
+                height=height,
+                device_id=camera_id
+            )
+            db.session.add(image_record)
+            db.session.commit()
+            logger.info(f"图片信息已存入数据库，ID: {image_record.id}")
+        except Exception as db_error:
+            db.session.rollback()
+            logger.error(f"数据库存储失败: {str(db_error)}")
+        logger.info(f"截图上传成功: {bucket_name}/{object_name}")
+        return download_url
+    except StorageObjectError as e:
+        logger.error(f"截图上传错误: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"截图上传未知错误: {str(e)}")
+        return None
+
+
+# ------------------------- RTSP截图功能 -------------------------
+def rtsp_capture_task(device_id, rtsp_url, interval, max_count):
+    """RTSP截图线程任务"""
+    cap = cv2.VideoCapture(rtsp_url)
+    count = 0
+    image_format = current_app.config.get('SCREENSHOT_FORMAT', 'jpg')
+
+    while rtsp_tasks.get(device_id, {}).get('running', False) and count < max_count:
+        start_time = time.time()
+        ret, frame = cap.read()
+        if not ret:
+            logger.error(f"设备 {device_id} RTSP流读取失败")
+            break
+
+        image_url = upload_screenshot_to_minio(device_id, frame, image_format)
+        if image_url:
+            logger.info(f"设备 {device_id} 截图已上传: {image_url}")
+            count += 1
+        else:
+            logger.error(f"设备 {device_id} 截图上传失败")
+
+        elapsed = time.time() - start_time
+        sleep_time = max(0, interval - elapsed)
+        time.sleep(sleep_time)
+
+    cap.release()
+    rtsp_tasks[device_id]['running'] = False
+
+
+@camera_bp.route('/device/<int:device_id>/rtsp/start', methods=['POST'])
+def start_rtsp_capture(device_id):
+    """启动RTSP截图"""
+    try:
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'code': 400, 'msg': f'设备不存在: ID={device_id}'}), 400
+        data = request.get_json()
+        rtsp_url = data.get('rtsp_url', device.source)
+        interval = data.get('interval', 5)
+        max_count = data.get('max_count', 100)
+
+        if not rtsp_url:
+            return jsonify({'code': 400, 'msg': 'RTSP地址不能为空'}), 400
+
+        if device_id in rtsp_tasks and rtsp_tasks[device_id]['running']:
+            return jsonify({'code': 400, 'msg': '该设备的截图任务已在运行'}), 400
+
+        rtsp_tasks[device_id] = {'running': True, 'thread': None}
+        thread = threading.Thread(
+            target=rtsp_capture_task,
+            args=(device_id, rtsp_url, interval, max_count)
+        )
+        thread.daemon = True
+        thread.start()
+        rtsp_tasks[device_id]['thread'] = thread
+
+        return jsonify({
+            'code': 0,
+            'msg': 'RTSP截图任务已启动',
+            'data': {
+                'task_id': thread.ident
+            }
+        })
+    except Exception as e:
+        logger.error(f"启动RTSP截图失败: {str(e)}")
+        return jsonify({'code': 500, 'msg': f'启动RTSP截图失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<int:device_id>/rtsp/stop', methods=['POST'])
+def stop_rtsp_capture(device_id):
+    """停止RTSP截图任务"""
+    try:
+        if device_id in rtsp_tasks:
+            rtsp_tasks[device_id]['running'] = False
+            if rtsp_tasks[device_id]['thread']:
+                rtsp_tasks[device_id]['thread'].join(timeout=5.0)
+            return jsonify({'code': 0, 'msg': 'RTSP截图任务已停止'})
+        return jsonify({'code': 400, 'msg': '未找到运行的RTSP截图任务'}), 400
+    except Exception as e:
+        logger.error(f"停止RTSP截图失败: {str(e)}")
+        return jsonify({'code': 500, 'msg': f'停止RTSP截图失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<int:device_id>/rtsp/status', methods=['GET'])
+def rtsp_status(device_id):
+    """获取RTSP截图状态"""
+    try:
+        status = "stopped"
+        if device_id in rtsp_tasks:
+            status = "running" if rtsp_tasks[device_id]['running'] else "stopped"
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': {'status': status}
+        })
+    except Exception as e:
+        logger.error(f"获取RTSP状态失败: {str(e)}")
+        return jsonify({'code': 500, 'msg': f'获取RTSP状态失败: {str(e)}'}), 500
+
+
+# ------------------------- ONVIF功能 -------------------------
+def onvif_capture_task(device_id, snapshot_uri, username, password, interval, max_count):
+    """ONVIF截图线程任务"""
+    count = 0
+    auth = (username, password) if username and password else None
+    image_format = current_app.config.get('SCREENSHOT_FORMAT', 'jpg')
+
+    while onvif_tasks.get(device_id, {}).get('running', False) and count < max_count:
+        start_time = time.time()
+        try:
+            response = requests.get(snapshot_uri, auth=auth, timeout=10)
+            if response.status_code == 200:
+                image_bytes = io.BytesIO(response.content)
+                image_bytes.seek(0)
+                image_np = cv2.imdecode(np.frombuffer(image_bytes.read(), np.uint8), cv2.IMREAD_COLOR)
+
+                image_url = upload_screenshot_to_minio(device_id, image_np, image_format)
+                if image_url:
+                    logger.info(f"设备 {device_id} ONVIF截图已上传: {image_url}")
+                    count += 1
+                else:
+                    logger.error(f"设备 {device_id} ONVIF截图上传失败")
+            else:
+                logger.error(f"ONVIF快照请求失败: {response.status_code}")
+        except Exception as e:
+            logger.error(f"ONVIF截图失败: {str(e)}")
+
+        elapsed = time.time() - start_time
+        sleep_time = max(0, interval - elapsed)
+        time.sleep(sleep_time)
+
+    onvif_tasks[device_id]['running'] = False
+
+
+@camera_bp.route('/device/<int:device_id>/onvif/start', methods=['POST'])
+def start_onvif_capture(device_id):
+    """启动ONVIF截图"""
+    try:
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'code': 400, 'msg': f'设备不存在: ID={device_id}'}), 400
+        data = request.get_json()
+        interval = data.get('interval', 10)
+        max_count = data.get('max_count', 100)
+
+        snapshot_uri = get_snapshot_uri(
+            device.ip, device.port, device.username, device.password
+        )
+        if not snapshot_uri:
+            return jsonify({'code': 400, 'msg': '无法获取ONVIF快照URI'}), 400
+
+        if device_id in onvif_tasks and onvif_tasks[device_id]['running']:
+            return jsonify({'code': 400, 'msg': '该设备的ONVIF截图任务已在运行'}), 400
+
+        onvif_tasks[device_id] = {'running': True, 'thread': None}
+        thread = threading.Thread(
+            target=onvif_capture_task,
+            args=(device_id, snapshot_uri, device.username, device.password, interval, max_count)
+        )
+        thread.daemon = True
+        thread.start()
+        onvif_tasks[device_id]['thread'] = thread
+
+        return jsonify({
+            'code': 0,
+            'msg': 'ONVIF截图任务已启动',
+            'data': {
+                'task_id': thread.ident
+            }
+        })
+    except Exception as e:
+        logger.error(f"启动ONVIF截图失败: {str(e)}")
+        return jsonify({'code': 500, 'msg': f'启动ONVIF截图失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<int:device_id>/onvif/stop', methods=['POST'])
+def stop_onvif_capture(device_id):
+    """停止ONVIF截图"""
+    try:
+        if device_id in onvif_tasks:
+            onvif_tasks[device_id]['running'] = False
+            if onvif_tasks[device_id]['thread']:
+                onvif_tasks[device_id]['thread'].join(timeout=5.0)
+            return jsonify({'code': 0, 'msg': 'ONVIF截图任务已停止'})
+        return jsonify({'code': 400, 'msg': '未找到运行的ONVIF截图任务'}), 400
+    except Exception as e:
+        logger.error(f"停止ONVIF截图失败: {str(e)}")
+        return jsonify({'code': 500, 'msg': f'停止ONVIF截图失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/device/<int:device_id>/onvif/status', methods=['GET'])
+def onvif_status(device_id):
+    """获取ONVIF截图状态"""
+    try:
+        status = "stopped"
+        if device_id in onvif_tasks:
+            status = "running" if onvif_tasks[device_id]['running'] else "stopped"
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': {'status': status}
+        })
+    except Exception as e:
+        logger.error(f"获取ONVIF截图状态失败: {str(e)}")
+        return jsonify({'code': 500, 'msg': f'获取ONVIF截图状态失败: {str(e)}'}), 500
+
+
+# ------------------------- RTSP/RTMP单帧抓拍接口 -------------------------
+@camera_bp.route('/device/<string:device_id>/snapshot', methods=['POST'])
+def capture_snapshot(device_id):
+    """从RTSP/RTMP流抓取一帧图片并存入数据库"""
+    try:
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'code': 400, 'msg': f'设备不存在: ID={device_id}'}), 400
+        
+        if not device.source:
+            return jsonify({'code': 400, 'msg': '设备源地址为空'}), 400
+        
+        import cv2
+        import subprocess
+        import numpy as np
+        
+        source = device.source.strip()
+        source_lower = source.lower()
+        
+        # 判断是否是RTMP流
+        if source_lower.startswith('rtmp://'):
+            # 使用FFmpeg从RTMP流中抽帧
+            try:
+                # 使用FFmpeg从RTMP流中抽取一帧并输出为JPEG格式
+                ffmpeg_cmd = [
+                    'ffmpeg',
+                    '-i', source,  # RTMP流地址
+                    '-vframes', '1',  # 只抽取1帧
+                    '-f', 'image2',  # 输出格式为图片
+                    '-vcodec', 'mjpeg',  # 使用MJPEG编码
+                    '-q:v', '2',  # 高质量
+                    'pipe:1'  # 输出到标准输出
+                ]
+                
+                # 执行FFmpeg命令并捕获输出
+                process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                
+                stdout, stderr = process.communicate(timeout=10)  # 10秒超时
+                
+                if process.returncode != 0:
+                    error_msg = stderr.decode('utf-8', errors='ignore') if stderr else '未知错误'
+                    return jsonify({'code': 500, 'msg': f'RTMP流抽帧失败: {error_msg}'}), 500
+                
+                if not stdout:
+                    return jsonify({'code': 500, 'msg': 'RTMP流抽帧失败: 未获取到图像数据'}), 500
+                
+                # 将FFmpeg输出的JPEG数据解码为OpenCV图像
+                image_array = np.frombuffer(stdout, np.uint8)
+                frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+                
+                if frame is None:
+                    return jsonify({'code': 500, 'msg': 'RTMP流抽帧失败: 图像解码失败'}), 500
+            except subprocess.TimeoutExpired:
+                return jsonify({'code': 500, 'msg': 'RTMP流抽帧超时'}), 500
+            except Exception as e:
+                logger.error(f"RTMP流抽帧异常: {str(e)}", exc_info=True)
+                return jsonify({'code': 500, 'msg': f'RTMP流抽帧异常: {str(e)}'}), 500
+        else:
+            # 使用OpenCV从RTSP流抓取一帧
+            cap = cv2.VideoCapture(source)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 减少缓冲区，获取最新帧
+            
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret:
+                return jsonify({'code': 500, 'msg': '无法从RTSP流读取帧'}), 500
+        
+        # 上传到MinIO并存入数据库
+        image_url = upload_screenshot_to_minio(device_id, frame, 'jpg')
+        
+        if not image_url:
+            return jsonify({'code': 500, 'msg': '图片上传失败'}), 500
+        
+        # 获取图片信息
+        image_record = Image.query.filter_by(device_id=device_id).order_by(Image.created_at.desc()).first()
+        
+        return jsonify({
+            'code': 0,
+            'msg': '抓拍成功',
+            'data': {
+                'image_id': image_record.id if image_record else None,
+                'image_url': image_url,
+                'width': image_record.width if image_record else None,
+                'height': image_record.height if image_record else None
+            }
+        })
+    except Exception as e:
+        logger.error(f"抓拍失败: {str(e)}", exc_info=True)
+        return jsonify({'code': 500, 'msg': f'抓拍失败: {str(e)}'}), 500
+
+
+# ------------------------- 设备发现接口 -------------------------
+@camera_bp.route('/discovery', methods=['GET'])
+def discover_devices():
+    """发现网络中的ONVIF设备"""
+    try:
+        devices = search_camera()
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': devices
+        })
+    except Exception as e:
+        logger.error(f'设备发现失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '设备发现失败'}), 500
+
+
+# ------------------------- 设备刷新服务 -------------------------
+@camera_bp.route('/refresh', methods=['POST'])
+def refresh_devices():
+    """刷新设备IP信息"""
+    try:
+        refresh_camera()
+        return jsonify({
+            'code': 0,
+            'msg': '设备刷新任务已启动'
+        })
+    except Exception as e:
+        logger.error(f'设备刷新失败: {str(e)}')
+        return jsonify({'code': 500, 'msg': '设备刷新失败'}), 500
+
+
+@camera_bp.route('/callback/on_publish', methods=['POST'])
+def on_publish_callback():
+    """SRS发布回调接口
+    当客户端尝试发布RTMP流时，SRS会调用此接口
+    如果检测到流已存在，会尝试停止旧的发布者，然后允许新的发布
+    
+    注意：此回调必须快速响应（建议<1秒），否则SRS可能会超时并拒绝推流
+    """
+    import threading
+    
+    # 立即返回允许推流，避免阻塞
+    # 流冲突检查在后台线程中异步执行
+    try:
+        data = request.get_json()
+        if not data:
+            logger.debug("on_publish回调：请求数据为空，允许发布")
+            return jsonify({'code': 0, 'msg': None})
+        
+        # 从回调数据中提取流信息
+        stream_url = data.get('stream_url', '')  # 格式: /live/1764341204704370859
+        client_id = data.get('client_id', '')
+        app = data.get('app', '')
+        stream = data.get('stream', '')
+        
+        logger.debug(f"on_publish回调：收到推流请求 stream_url={stream_url}, client_id={client_id}, app={app}, stream={stream}")
+        
+        if not stream_url:
+            logger.debug(f"on_publish回调：流URL为空，允许发布 client_id={client_id}")
+            return jsonify({'code': 0, 'msg': None})
+        
+        # 在后台线程中异步检查并处理流冲突，避免阻塞回调响应
+        def check_and_stop_existing_stream_async():
+            try:
+                # 从stream_url提取流路径: /live/1764341204704370859 -> live/1764341204704370859
+                stream_path = stream_url.lstrip('/')
+                
+                # 获取SRS服务器地址（从环境变量或使用默认值）
+                srs_host = os.getenv('SRS_HOST', 'localhost')
+                srs_api_url = f"http://{srs_host}:1985/api/v1/streams/"
+                
+                # 获取所有流（使用较短的超时时间）
+                try:
+                    response = requests.get(srs_api_url, timeout=1)
+                    if response.status_code == 200:
+                        streams = response.json()
+                        
+                        # 查找匹配的流
+                        stream_list = []
+                        if isinstance(streams, dict) and 'streams' in streams:
+                            stream_list = streams['streams']
+                        elif isinstance(streams, list):
+                            stream_list = streams
+                        
+                        for existing_stream in stream_list:
+                            stream_app = existing_stream.get('app', '')
+                            stream_stream = existing_stream.get('stream', '')
+                            full_stream_path = f"{stream_app}/{stream_stream}" if stream_stream else stream_app
+                            
+                            # 检查是否匹配当前流
+                            if stream_path == full_stream_path or stream_path.endswith(full_stream_path) or full_stream_path.endswith(stream_path):
+                                publish_info = existing_stream.get('publish', {})
+                                publish_cid = publish_info.get('cid', '') if isinstance(publish_info, dict) else None
+                                
+                                # 如果已有发布者且不是当前客户端，尝试停止旧的发布者
+                                if publish_cid and publish_cid != client_id:
+                                    logger.warning(f"on_publish回调：检测到流 {stream_path} 已有发布者 (client_id={publish_cid})，尝试停止...")
+                                    
+                                    # 尝试断开发布者客户端连接
+                                    client_api_url = f"http://{srs_host}:1985/api/v1/clients/{publish_cid}"
+                                    try:
+                                        stop_response = requests.delete(client_api_url, timeout=1)
+                                        if stop_response.status_code in [200, 204]:
+                                            logger.info(f"on_publish回调：已停止旧的发布者 {publish_cid}，允许新发布")
+                                        else:
+                                            logger.warning(f"on_publish回调：停止旧发布者失败 (状态码: {stop_response.status_code})")
+                                    except Exception as e:
+                                        logger.warning(f"on_publish回调：停止旧发布者异常: {str(e)}")
+                                
+                                break
+                except requests.exceptions.Timeout:
+                    logger.debug(f"on_publish回调：检查现有流超时，跳过检查")
+                except Exception as e:
+                    logger.debug(f"on_publish回调：检查现有流时出错: {str(e)}")
+            except Exception as e:
+                logger.debug(f"on_publish回调：异步检查流冲突时出错: {str(e)}")
+        
+        # 启动后台线程处理流冲突检查（不阻塞回调响应）
+        threading.Thread(target=check_and_stop_existing_stream_async, daemon=True).start()
+        
+        # 立即返回允许发布（不等待流冲突检查完成）
+        return jsonify({
+            'code': 0,
+            'msg': None
+        })
+    except Exception as e:
+        logger.error(f"on_publish回调异常: {str(e)}", exc_info=True)
+        # 发生异常时也允许发布，避免影响正常流程
+        return jsonify({'code': 0, 'msg': None})
+
+
+def extract_thumbnail_from_video(video_path, output_path=None, frame_position=0.1):
+    """从视频文件中抽取一帧作为封面
+    
+    Args:
+        video_path: 视频文件路径
+        output_path: 输出图片路径，如果为None则返回图像数据
+        frame_position: 抽取位置（0.0-1.0，0.1表示视频的10%位置）
+    
+    Returns:
+        如果output_path为None，返回图像数据（numpy array），否则返回True/False
+    """
+    try:
+        # 检查文件是否存在
+        if not os.path.exists(video_path):
+            logger.error(f"视频文件不存在: {video_path}")
+            return None if output_path is None else False
+        
+        # 检查文件是否可读
+        if not os.access(video_path, os.R_OK):
+            logger.error(f"视频文件不可读: {video_path}")
+            return None if output_path is None else False
+        
+        # 确保文件已完全写入（等待文件大小稳定）
+        max_wait_attempts = 5
+        wait_interval = 0.3
+        for attempt in range(max_wait_attempts):
+            try:
+                size1 = os.path.getsize(video_path)
+                time.sleep(wait_interval)
+                size2 = os.path.getsize(video_path)
+                if size1 == size2 and size1 > 0:
+                    break
+            except OSError:
+                pass
+            if attempt == max_wait_attempts - 1:
+                logger.warning(f"视频文件可能仍在写入中: {video_path}")
+        
+        # 将路径转换为绝对路径
+        abs_video_path = os.path.abspath(video_path)
+        
+        # 尝试多种方式打开视频文件
+        cap = None
+        backends_to_try = [
+            (cv2.CAP_FFMPEG, "FFMPEG"),
+            (cv2.CAP_ANY, "ANY"),  # 自动选择后端
+        ]
+        
+        for backend, backend_name in backends_to_try:
+            try:
+                if backend == cv2.CAP_FFMPEG:
+                    # 对于FFMPEG，使用文件路径字符串
+                    cap = cv2.VideoCapture(abs_video_path, backend)
+                else:
+                    # 对于其他后端，直接使用路径
+                    cap = cv2.VideoCapture(abs_video_path, backend)
+                
+                if cap and cap.isOpened():
+                    # 尝试读取一帧来验证文件是否真的可读
+                    test_ret, _ = cap.read()
+                    if test_ret:
+                        # 重置到开头
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        logger.debug(f"成功使用{backend_name}后端打开视频: {abs_video_path}")
+                        break
+                    else:
+                        cap.release()
+                        cap = None
+            except Exception as e:
+                if cap:
+                    cap.release()
+                cap = None
+                logger.debug(f"使用{backend_name}后端打开视频失败: {abs_video_path}, error={str(e)}")
+        
+        if not cap or not cap.isOpened():
+            logger.error(f"无法打开视频文件（已尝试多种后端）: {abs_video_path}")
+            return None if output_path is None else False
+        
+        # 获取视频总帧数
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames == 0:
+            # 如果无法获取总帧数，尝试读取第一帧
+            ret, frame = cap.read()
+            cap.release()
+            if not ret or frame is None:
+                logger.error(f"无法从视频中读取帧: {video_path}")
+                return None if output_path is None else False
+            
+            if output_path:
+                cv2.imwrite(output_path, frame)
+                return True
+            else:
+                return frame
+        
+        # 计算要抽取的帧位置
+        target_frame = int(total_frames * frame_position)
+        if target_frame < 1:
+            target_frame = 1
+        
+        # 设置帧位置
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        
+        # 读取帧
+        ret, frame = cap.read()
+        cap.release()
+        
+        if not ret or frame is None:
+            logger.error(f"无法从视频中读取帧: {video_path}, target_frame={target_frame}")
+            return None if output_path is None else False
+        
+        if output_path:
+            cv2.imwrite(output_path, frame)
+            return True
+        else:
+            return frame
+            
+    except Exception as e:
+        logger.error(f"抽取视频封面失败: {video_path}, error={str(e)}", exc_info=True)
+        return None if output_path is None else False
+
+
+def cleanup_device_recordings(device_id: str, max_recordings: int = 50, keep_ratio: float = 0.1):
+    """清理指定设备目录下的SRS录像文件，当录像数量超过限制时，删除最旧的录像
+    
+    Args:
+        device_id: 设备ID
+        max_recordings: 最大录像数量，超过此数量时触发清理（默认50个）
+        keep_ratio: 保留比例（0.0-1.0），例如0.1表示保留最新的10%（删除90%）
+    """
+    import os
+    try:
+        # SRS录像目录路径：/data/playbacks/live/{device_id}/
+        srs_record_dir = os.getenv('SRS_RECORD_DIR', '/data/playbacks')
+        device_record_dir = os.path.join(srs_record_dir, 'live', str(device_id))
+        
+        if not os.path.exists(device_record_dir):
+            logger.debug(f"设备录像目录不存在: {device_record_dir}")
+            return
+        
+        # 递归获取该设备目录下的所有.flv录像文件
+        recording_files = []
+        for root, dirs, files in os.walk(device_record_dir):
+            for filename in files:
+                if filename.lower().endswith('.flv'):
+                    file_path = os.path.join(root, filename)
+                    if os.path.isfile(file_path):
+                        # 获取文件修改时间
+                        try:
+                            mtime = os.path.getmtime(file_path)
+                            recording_files.append((file_path, mtime))
+                        except Exception as e:
+                            logger.warning(f"获取文件修改时间失败: {file_path}, 错误: {str(e)}")
+                            continue
+        
+        total_recordings = len(recording_files)
+        
+        # 如果录像数量未超过限制，不需要清理
+        if total_recordings <= max_recordings:
+            logger.debug(f"设备 {device_id} 录像目录检查: 总数={total_recordings}, 未超过限制={max_recordings}")
+            return
+        
+        # 按修改时间排序（最旧的在前）
+        recording_files.sort(key=lambda x: x[1])
+        
+        # 计算需要保留的录像数量（最新的10%）
+        keep_count = max(1, int(total_recordings * keep_ratio))
+        
+        # 计算需要删除的录像数量（最旧的90%）
+        delete_count = total_recordings - keep_count
+        
+        # 不再删除 /data/playbacks 目录下的录像文件，只记录统计信息
+        if delete_count > 0:
+            logger.debug(f"设备 {device_id} 录像统计: 总数={total_recordings}, 应删除={delete_count}, 保留={keep_count}（已禁用删除 /data/playbacks 逻辑）")
+    except Exception as e:
+        logger.error(f"清理设备 {device_id} 录像失败: {str(e)}", exc_info=True)
+
+
+@camera_bp.route('/callback/on_dvr', methods=['POST'])
+def on_dvr_callback():
+    """SRS录像生成回调接口
+    当SRS生成录像文件时，会调用此接口
+    需要将录像文件保存到设备的录像空间，并上传到MinIO
+    同时抽取一帧作为封面并存入数据库
+    """
+    import os
+    from datetime import datetime
+    from app.services.record_space_service import (
+        get_record_space_by_device_id, 
+        create_record_space_for_device,
+        get_minio_client
+    )
+    from models import Device, Playback
+    
+    try:
+        # 解析SRS回调数据
+        data = request.get_json()
+        if not data:
+            logger.warning("on_dvr回调：请求数据为空")
+            return jsonify({'code': 0, 'msg': None})
+        
+        # 记录完整的回调数据用于调试
+        logger.debug(f"on_dvr回调：收到回调数据 {data}")
+        
+        # 从回调数据中提取信息
+        # SRS回调数据结构示例：
+        # {'action': 'on_dvr', 'app': 'live', 'stream': '1764341204704370850', 
+        #  'file': '/data/playbacks/live/1764341204704370850/2025/11/28/1764352410083.flv', ...}
+        # 注意：stream字段的值就是设备ID（例如：'1764341204704370850'）
+        stream = data.get('stream', '')  # stream字段的值就是设备ID
+        file_path = data.get('file', '')  # 录像文件路径（已经是绝对路径）
+        
+        if not stream:
+            logger.warning("on_dvr回调：流名称为空（设备ID为空），回调数据: %s", data)
+            return jsonify({'code': 0, 'msg': None})
+        
+        if not file_path:
+            logger.warning("on_dvr回调：文件路径为空，回调数据: %s", data)
+            return jsonify({'code': 0, 'msg': None})
+        
+        # stream字段的值可能是设备ID，也可能是流名称
+        # 首先尝试将stream直接作为设备ID查询
+        device_id = stream
+        device = Device.query.get(device_id)
+        
+        # 如果直接查询不到，尝试从流名称中提取设备ID
+        # 流名称格式可能是：live/{device_id} 或 {device_id}
+        if not device:
+            # 尝试从流名称中提取设备ID（如果格式是 live/{device_id}）
+            if stream.startswith('live/'):
+                potential_device_id = stream[5:]  # 移除 'live/' 前缀
+                device = Device.query.get(potential_device_id)
+                if device:
+                    device_id = potential_device_id
+                    logger.debug(f"on_dvr回调：从流名称中提取设备ID stream={stream}, device_id={device_id}")
+        
+        # 如果还是找不到，尝试通过rtmp_stream字段匹配设备
+        # 查询rtmp_stream包含该流名称的设备
+        if not device:
+            # 构建可能的RTMP地址格式：rtmp://*/live/{stream} 或 rtmp://*/{stream}
+            possible_rtmp_patterns = [
+                f"live/{stream}",  # 最常见：rtmp://host/live/{device_id}
+                stream,  # 直接匹配：rtmp://host/{device_id}
+                f"/live/{stream}",  # 带斜杠：rtmp://host/live/{device_id}
+                f"/{stream}",  # 带斜杠：rtmp://host/{device_id}
+                f"live/{stream}/",  # 带尾部斜杠
+                f"{stream}/"  # 带尾部斜杠
+            ]
+            
+            # 查询rtmp_stream字段包含这些模式的设备
+            for pattern in possible_rtmp_patterns:
+                device = Device.query.filter(
+                    Device.rtmp_stream.like(f'%{pattern}%')
+                ).first()
+                if device:
+                    device_id = device.id
+                    logger.debug(f"on_dvr回调：通过rtmp_stream匹配到设备 stream={stream}, device_id={device_id}, pattern={pattern}")
+                    break
+        
+        # 如果仍然找不到，尝试从文件路径中提取设备ID
+        # 文件路径格式：/data/playbacks/live/{device_id}/YYYY/MM/DD/filename
+        # 或：/data/playbacks/live/{stream}/YYYY/MM/DD/filename
+        if not device and file_path:
+            try:
+                path_parts = file_path.split(os.sep)
+                # 查找 'live' 目录后面的部分，可能是设备ID或流名称
+                for i, part in enumerate(path_parts):
+                    if part == 'live' and i + 1 < len(path_parts):
+                        potential_id = path_parts[i + 1]
+                        # 尝试作为设备ID查询
+                        device = Device.query.get(potential_id)
+                        if device:
+                            device_id = potential_id
+                            logger.debug(f"on_dvr回调：从文件路径中提取设备ID file_path={file_path}, device_id={device_id}")
+                            break
+                        # 如果作为设备ID找不到，尝试通过rtmp_stream匹配
+                        if not device:
+                            for pattern in [f"live/{potential_id}", potential_id, f"/live/{potential_id}", f"/{potential_id}"]:
+                                device = Device.query.filter(
+                                    Device.rtmp_stream.like(f'%{pattern}%')
+                                ).first()
+                                if device:
+                                    device_id = device.id
+                                    logger.debug(f"on_dvr回调：从文件路径中通过rtmp_stream匹配到设备 file_path={file_path}, stream={potential_id}, device_id={device_id}, pattern={pattern}")
+                                    break
+                        if device:
+                            break
+            except Exception as e:
+                logger.debug(f"on_dvr回调：从文件路径提取设备ID失败 file_path={file_path}, error={str(e)}")
+        
+        logger.debug(f"on_dvr回调：开始处理录像 device_id={device_id}, stream={stream}, file_path={file_path}")
+        
+        # 如果仍然找不到设备，记录警告并返回
+        if not device:
+            logger.warning(f"on_dvr回调：设备不存在 stream={stream}, 已尝试多种匹配方式")
+            return jsonify({'code': 0, 'msg': None})
+        
+        # 获取或创建设备的录像空间
+        record_space = get_record_space_by_device_id(device_id)
+        if not record_space:
+            try:
+                logger.debug(f"on_dvr回调：为设备 {device_id} 创建录像空间")
+                record_space = create_record_space_for_device(device_id, device.name)
+                logger.debug(f"on_dvr回调：录像空间创建成功 space_id={record_space.id}, bucket_name={record_space.bucket_name}")
+            except Exception as e:
+                logger.error(f"on_dvr回调：创建设备录像空间失败 device_id={device_id}, error={str(e)}", exc_info=True)
+                return jsonify({'code': 0, 'msg': None})
+        else:
+            logger.debug(f"on_dvr回调：使用现有录像空间 space_id={record_space.id}, bucket_name={record_space.bucket_name}")
+        
+        # 处理文件路径：可能是绝对路径，也可能是相对路径（需要结合cwd）
+        cwd = data.get('cwd', '')
+        if os.path.isabs(file_path):
+            # 已经是绝对路径
+            absolute_file_path = file_path
+        elif cwd and file_path:
+            # 相对路径，需要结合cwd
+            absolute_file_path = os.path.join(cwd, file_path)
+        else:
+            # 如果既不是绝对路径，也没有cwd，尝试直接使用
+            absolute_file_path = file_path
+        
+        logger.debug(f"on_dvr回调：处理后的文件路径 absolute_file_path={absolute_file_path}, cwd={cwd}, original_file={file_path}")
+        
+        # 等待文件创建完成（SRS可能在回调时文件还在写入中）
+        max_retries = 10
+        retry_interval = 0.5  # 每次等待0.5秒
+        file_exists = False
+        file_size = 0
+        
+        for attempt in range(max_retries):
+            if os.path.exists(absolute_file_path):
+                # 检查文件大小是否稳定（文件可能还在写入中）
+                try:
+                    size1 = os.path.getsize(absolute_file_path)
+                    time.sleep(0.2)  # 等待0.2秒
+                    size2 = os.path.getsize(absolute_file_path)
+                    if size1 == size2 and size1 > 0:
+                        # 文件大小稳定且不为0，说明文件已创建完成
+                        file_exists = True
+                        file_size = size1
+                        logger.debug(f"on_dvr回调：文件已就绪 file_path={absolute_file_path}, size={file_size} bytes, attempts={attempt + 1}")
+                        break
+                except OSError as e:
+                    # 文件可能还在创建中，继续等待
+                    logger.debug(f"on_dvr回调：文件可能还在创建中 attempt={attempt + 1}, error={str(e)}")
+                    pass
+            
+            if attempt < max_retries - 1:
+                time.sleep(retry_interval)
+        
+        if not file_exists:
+            logger.warning(f"on_dvr回调：录像文件不存在或仍在写入中 file_path={absolute_file_path}, cwd={cwd}, original_file={file_path}, max_retries={max_retries}")
+            return jsonify({'code': 0, 'msg': None})
+        
+        # 从文件路径中提取日期信息
+        # 文件路径格式：/data/playbacks/live/{device_id}/{year}/{month}/{day}/{filename}
+        # 例如：/data/playbacks/live/1764341204704370850/2025/11/28/1764352410083.flv
+        path_parts = absolute_file_path.split(os.sep)
+        logger.debug(f"on_dvr回调：路径解析 path_parts={path_parts}")
+        
+        # 查找设备ID在路径中的位置，然后提取日期部分
+        # 路径结构：['', 'data', 'playbacks', 'live', device_id, year, month, day, filename]
+        try:
+            # 找到 'live' 后面的设备ID位置
+            live_index = -1
+            for i, part in enumerate(path_parts):
+                if part == 'live':
+                    live_index = i
+                    break
+            
+            if live_index == -1:
+                logger.warning(f"on_dvr回调：路径中未找到'live'目录 file_path={absolute_file_path}")
+                # 使用文件修改时间作为备选方案
+                file_mtime = os.path.getmtime(absolute_file_path)
+                record_time = datetime.fromtimestamp(file_mtime)
+                date_dir = record_time.strftime('%Y/%m/%d')
+                logger.warning(f"on_dvr回调：无法从路径解析日期，使用文件修改时间 date_dir={date_dir}, file_path={absolute_file_path}")
+            elif live_index + 4 >= len(path_parts):
+                # 路径格式不符合预期，使用文件修改时间作为备选方案
+                logger.warning(f"on_dvr回调：路径格式不符合预期 live_index={live_index}, path_length={len(path_parts)}, file_path={absolute_file_path}")
+                file_mtime = os.path.getmtime(absolute_file_path)
+                record_time = datetime.fromtimestamp(file_mtime)
+                date_dir = record_time.strftime('%Y/%m/%d')
+                logger.warning(f"on_dvr回调：无法从路径解析日期，使用文件修改时间 date_dir={date_dir}, file_path={absolute_file_path}")
+            else:
+                # 提取日期部分：year/month/day
+                # live_index + 1 = device_id
+                # live_index + 2 = year
+                # live_index + 3 = month
+                # live_index + 4 = day
+                year = path_parts[live_index + 2]
+                month = path_parts[live_index + 3]
+                day = path_parts[live_index + 4]
+                date_dir = f"{year}/{month}/{day}"
+                # 优先使用文件修改时间作为record_time（包含完整的时间信息）
+                # 如果文件修改时间不可用，则使用从路径解析的日期（时间为00:00:00）
+                try:
+                    file_mtime = os.path.getmtime(absolute_file_path)
+                    record_time = datetime.fromtimestamp(file_mtime)
+                    logger.debug(f"on_dvr回调：使用文件修改时间作为record_time date_dir={date_dir}, record_time={record_time}")
+                except (OSError, ValueError):
+                    # 如果获取文件修改时间失败，使用从路径解析的日期
+                    try:
+                        record_time = datetime(int(year), int(month), int(day))
+                        logger.warning(f"on_dvr回调：无法获取文件修改时间，使用路径日期 date_dir={date_dir}, record_time={record_time}")
+                    except (ValueError, TypeError):
+                        # 如果日期解析也失败，使用当前时间
+                        record_time = datetime.utcnow()
+                        logger.warning(f"on_dvr回调：日期解析失败，使用当前时间 record_time={record_time}")
+        except (IndexError, ValueError) as e:
+            # 如果解析失败，使用文件修改时间作为备选方案
+            logger.warning(f"on_dvr回调：从路径解析日期失败 error={str(e)}, file_path={absolute_file_path}", exc_info=True)
+            file_mtime = os.path.getmtime(absolute_file_path)
+            record_time = datetime.fromtimestamp(file_mtime)
+            date_dir = record_time.strftime('%Y/%m/%d')
+            logger.warning(f"on_dvr回调：使用文件修改时间作为日期 date_dir={date_dir}")
+        
+        # 获取文件名
+        filename = os.path.basename(absolute_file_path)
+        
+        # 根据文件扩展名确定content_type
+        file_ext = os.path.splitext(filename)[1].lower()
+        content_type_map = {
+            '.mp4': 'video/mp4',
+            '.flv': 'video/x-flv',
+            '.avi': 'video/x-msvideo',
+            '.mov': 'video/quicktime',
+            '.mkv': 'video/x-matroska',
+            '.wmv': 'video/x-ms-wmv',
+            '.m4v': 'video/x-m4v',
+            '.ts': 'video/mp2t'
+        }
+        content_type = content_type_map.get(file_ext, 'video/mp4')
+        
+        # 构建MinIO对象名称：device_id/YYYY/MM/DD/filename
+        object_name = f"{device_id}/{date_dir}/{filename}"
+        logger.debug(f"on_dvr回调：准备上传到MinIO bucket={record_space.bucket_name}, object_name={object_name}, file_size={file_size} bytes")
+        
+        # 上传到MinIO
+        minio_client = get_minio_client()
+        bucket_name = record_space.bucket_name
+        
+        # 确保bucket存在
+        if not minio_client.bucket_exists(bucket_name):
+            try:
+                minio_client.make_bucket(bucket_name)
+                logger.debug(f"on_dvr回调：创建MinIO bucket {bucket_name}")
+            except Exception as e:
+                logger.error(f"on_dvr回调：创建MinIO bucket失败 bucket_name={bucket_name}, error={str(e)}", exc_info=True)
+                return jsonify({'code': 0, 'msg': None})
+        
+        try:
+            # 上传文件到MinIO
+            minio_client.fput_object(
+                bucket_name,
+                object_name,
+                absolute_file_path,
+                content_type=content_type
+            )
+            logger.debug(f"on_dvr回调：录像上传成功 device_id={device_id}, bucket={bucket_name}, object_name={object_name}, file_size={file_size} bytes")
+            
+            # 抽取视频封面
+            thumbnail_path = None
+            try:
+                # 在抽取封面之前，再次确保文件已完全写入（FLV文件可能需要更多时间）
+                time.sleep(0.5)  # 额外等待0.5秒，确保文件完全写入
+                logger.debug(f"on_dvr回调：开始抽取视频封面 video_path={absolute_file_path}")
+                frame = extract_thumbnail_from_video(absolute_file_path, output_path=None, frame_position=0.1)
+                
+                if frame is not None:
+                    # 生成封面文件名（将视频文件扩展名替换为.jpg）
+                    thumbnail_filename = os.path.splitext(filename)[0] + '.jpg'
+                    thumbnail_object_name = f"{device_id}/{date_dir}/{thumbnail_filename}"
+                    
+                    # 将帧编码为JPEG格式
+                    success, encoded_image = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    if success:
+                        # 创建临时文件保存封面
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                            tmp_thumbnail_path = tmp_file.name
+                            tmp_file.write(encoded_image.tobytes())
+                        
+                        try:
+                            # 上传封面到MinIO
+                            minio_client.fput_object(
+                                bucket_name,
+                                thumbnail_object_name,
+                                tmp_thumbnail_path,
+                                content_type='image/jpeg'
+                            )
+                            # 构建封面的URL格式：/api/v1/buckets/{bucket_name}/objects/download?prefix={thumbnail_object_name}
+                            thumbnail_path = f"/api/v1/buckets/{bucket_name}/objects/download?prefix={quote(thumbnail_object_name, safe='')}"
+                            logger.debug(f"on_dvr回调：封面上传成功 device_id={device_id}, thumbnail_path={thumbnail_path}")
+                        finally:
+                            # 删除临时文件
+                            try:
+                                os.remove(tmp_thumbnail_path)
+                            except:
+                                pass
+                    else:
+                        logger.warning(f"on_dvr回调：封面编码失败 device_id={device_id}")
+                else:
+                    logger.warning(f"on_dvr回调：无法抽取视频封面 device_id={device_id}, video_path={absolute_file_path}")
+            except Exception as e:
+                logger.error(f"on_dvr回调：抽取封面失败 device_id={device_id}, error={str(e)}", exc_info=True)
+                # 封面抽取失败不影响主流程，继续执行
+            
+            # 创建或更新Playback记录
+            try:
+                # 计算视频时长（秒），如果无法获取则使用默认值
+                duration = 0
+                try:
+                    cap = cv2.VideoCapture(absolute_file_path)
+                    if cap.isOpened():
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                        if fps > 0 and frame_count > 0:
+                            duration = int(frame_count / fps)
+                        cap.release()
+                except:
+                    pass
+                
+                # 确定录制时间（如果之前没有设置，使用文件修改时间）
+                if 'record_time' not in locals():
+                    try:
+                        file_mtime = os.path.getmtime(absolute_file_path)
+                        record_time = datetime.fromtimestamp(file_mtime)
+                    except (OSError, ValueError):
+                        # 如果获取文件修改时间失败，使用当前时间
+                        record_time = datetime.utcnow()
+                        logger.warning(f"on_dvr回调：无法获取文件修改时间，使用当前时间作为record_time")
+                
+                # 构建录像文件的URL格式：/api/v1/buckets/{bucket_name}/objects/download?prefix={object_name}
+                file_path_url = f"/api/v1/buckets/{bucket_name}/objects/download?prefix={quote(object_name, safe='')}"
+                
+                # 查找是否已存在相同文件路径的记录（兼容旧格式和新格式）
+                # 先尝试用URL格式查询
+                existing_playback = Playback.query.filter_by(
+                    file_path=file_path_url,
+                    device_id=device_id
+                ).first()
+                
+                # 如果没找到，尝试用旧格式（object_name）查询（兼容旧数据）
+                if not existing_playback:
+                    existing_playback = Playback.query.filter_by(
+                        file_path=object_name,
+                        device_id=device_id
+                ).first()
+                
+                if existing_playback:
+                    # 更新现有记录（同时更新为URL格式）
+                    existing_playback.file_path = file_path_url
+                    existing_playback.thumbnail_path = thumbnail_path
+                    existing_playback.file_size = file_size
+                    if duration > 0:
+                        existing_playback.duration = duration
+                    # 使用带时区的本地时间（Asia/Shanghai，UTC+8）
+                    shanghai_tz = timezone(timedelta(hours=8))
+                    existing_playback.updated_at = datetime.now(shanghai_tz)
+                    db.session.commit()
+                    logger.debug(f"on_dvr回调：更新Playback记录 playback_id={existing_playback.id}, file_path={file_path_url}, thumbnail_path={thumbnail_path}")
+                else:
+                    # 创建新记录
+                    # 使用带时区的本地时间（Asia/Shanghai，UTC+8）
+                    shanghai_tz = timezone(timedelta(hours=8))
+                    current_time = datetime.now(shanghai_tz)
+                    playback = Playback(
+                        file_path=file_path_url,
+                        event_time=record_time,
+                        device_id=device_id,
+                        device_name=device.name if device else '',
+                        duration=duration if duration > 0 else 1,  # 至少1秒
+                        thumbnail_path=thumbnail_path,
+                        file_size=file_size,
+                        created_at=current_time,
+                        updated_at=current_time
+                    )
+                    db.session.add(playback)
+                    db.session.commit()
+                    logger.debug(f"on_dvr回调：创建Playback记录 playback_id={playback.id}, file_path={file_path_url}, thumbnail_path={thumbnail_path}")
+            except Exception as e:
+                logger.error(f"on_dvr回调：创建/更新Playback记录失败 device_id={device_id}, error={str(e)}", exc_info=True)
+                db.session.rollback()
+                # 记录创建失败不影响主流程，继续执行
+            
+            # 清理设备目录下的旧录像（超过50个时，删除最旧的90%）
+            try:
+                cleanup_device_recordings(device_id, max_recordings=50, keep_ratio=0.1)
+            except Exception as e:
+                logger.error(f"on_dvr回调：清理设备录像失败 device_id={device_id}, error={str(e)}", exc_info=True)
+                # 清理失败不影响主流程，继续执行
+            
+            # 可选：上传成功后删除本地文件（根据需求决定）
+            # os.remove(absolute_file_path)
+            
+        except StorageObjectError as e:
+            logger.error(f"on_dvr回调：录像上传失败 device_id={device_id}, bucket={bucket_name}, object_name={object_name}, error={str(e)}", exc_info=True)
+            return jsonify({'code': 0, 'msg': None})
+        except Exception as e:
+            logger.error(f"on_dvr回调：上传录像失败 device_id={device_id}, bucket={bucket_name}, object_name={object_name}, error={str(e)}", exc_info=True)
+            return jsonify({'code': 0, 'msg': None})
+        
+        logger.debug(f"on_dvr回调：处理完成 device_id={device_id}, object_name={object_name}, thumbnail_path={thumbnail_path}")
+        return jsonify({'code': 0, 'msg': None})
+        
+    except Exception as e:
+        logger.error(f"on_dvr回调处理失败: {str(e)}", exc_info=True)
+        return jsonify({'code': 0, 'msg': None})
+
+
+# ------------------------- 设备目录管理接口 -------------------------
+@camera_bp.route('/directory/list', methods=['GET'])
+def list_directories():
+    """查询目录列表（树形结构）"""
+    try:
+        def build_tree(parent_id=None):
+            """递归构建目录树"""
+            directories = DeviceDirectory.query.filter_by(parent_id=parent_id).order_by(DeviceDirectory.sort_order, DeviceDirectory.id).all()
+            result = []
+            for directory in directories:
+                directory_dict = {
+                    'id': directory.id,
+                    'name': directory.name,
+                    'parent_id': directory.parent_id,
+                    'description': directory.description,
+                    'sort_order': directory.sort_order,
+                    'device_count': Device.query.filter_by(directory_id=directory.id).count(),
+                    'created_at': directory.created_at.isoformat() if directory.created_at else None,
+                    'updated_at': directory.updated_at.isoformat() if directory.updated_at else None,
+                    'children': build_tree(directory.id)
+                }
+                result.append(directory_dict)
+            return result
+        
+        tree = build_tree()
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': tree
+        })
+    except Exception as e:
+        logger.error(f'查询目录列表失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'查询目录列表失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/directory', methods=['POST'])
+def create_directory():
+    """创建目录"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'msg': '请求数据不能为空'}), 400
+        
+        name = data.get('name', '').strip()
+        if not name:
+            return jsonify({'code': 400, 'msg': '目录名称不能为空'}), 400
+        
+        parent_id = data.get('parent_id')
+        if parent_id:
+            # 验证父目录是否存在
+            parent = DeviceDirectory.query.get(parent_id)
+            if not parent:
+                return jsonify({'code': 400, 'msg': '父目录不存在'}), 400
+        
+        description = data.get('description', '').strip()
+        sort_order = data.get('sort_order', 0)
+        
+        directory = DeviceDirectory(
+            name=name,
+            parent_id=parent_id,
+            description=description,
+            sort_order=sort_order
+        )
+        db.session.add(directory)
+        db.session.commit()
+        
+        return jsonify({
+            'code': 0,
+            'msg': '目录创建成功',
+            'data': {
+                'id': directory.id,
+                'name': directory.name,
+                'parent_id': directory.parent_id,
+                'description': directory.description,
+                'sort_order': directory.sort_order
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'创建目录失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'创建目录失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/directory/<int:directory_id>', methods=['PUT'])
+def update_directory(directory_id):
+    """更新目录"""
+    try:
+        directory = DeviceDirectory.query.get(directory_id)
+        if not directory:
+            return jsonify({'code': 400, 'msg': f'目录不存在: ID={directory_id}'}), 400
+        data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'msg': '请求数据不能为空'}), 400
+        
+        if 'name' in data:
+            name = data.get('name', '').strip()
+            if not name:
+                return jsonify({'code': 400, 'msg': '目录名称不能为空'}), 400
+            directory.name = name
+        
+        if 'parent_id' in data:
+            parent_id = data.get('parent_id')
+            if parent_id:
+                # 验证父目录是否存在
+                if parent_id == directory_id:
+                    return jsonify({'code': 400, 'msg': '不能将目录设置为自己的子目录'}), 400
+                parent = DeviceDirectory.query.get(parent_id)
+                if not parent:
+                    return jsonify({'code': 400, 'msg': '父目录不存在'}), 400
+                # 检查是否会形成循环引用
+                def check_circular(parent_id, current_id):
+                    if parent_id == current_id:
+                        return True
+                    parent_dir = DeviceDirectory.query.get(parent_id)
+                    if parent_dir and parent_dir.parent_id:
+                        return check_circular(parent_dir.parent_id, current_id)
+                    return False
+                if check_circular(parent_id, directory_id):
+                    return jsonify({'code': 400, 'msg': '不能将目录移动到其子目录下'}), 400
+            directory.parent_id = parent_id
+        
+        if 'description' in data:
+            directory.description = data.get('description', '').strip()
+        
+        if 'sort_order' in data:
+            directory.sort_order = data.get('sort_order', 0)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'code': 0,
+            'msg': '目录更新成功',
+            'data': {
+                'id': directory.id,
+                'name': directory.name,
+                'parent_id': directory.parent_id,
+                'description': directory.description,
+                'sort_order': directory.sort_order
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'更新目录失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'更新目录失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/directory/<int:directory_id>', methods=['DELETE'])
+def delete_directory(directory_id):
+    """删除目录"""
+    try:
+        directory = DeviceDirectory.query.get(directory_id)
+        if not directory:
+            return jsonify({'code': 400, 'msg': f'目录不存在: ID={directory_id}'}), 400
+        
+        # 检查是否有子目录
+        children_count = DeviceDirectory.query.filter_by(parent_id=directory_id).count()
+        if children_count > 0:
+            return jsonify({
+                'code': 400, 
+                'msg': f'不能删除当前目录，存在 {children_count} 个下级目录。请先删除所有下级目录后，才可以删除当前目录'
+            }), 400
+        
+        # 检查是否有设备
+        device_count = Device.query.filter_by(directory_id=directory_id).count()
+        if device_count > 0:
+            return jsonify({'code': 400, 'msg': f'该目录下存在 {device_count} 个设备，请先移除设备后再删除目录'}), 400
+        
+        db.session.delete(directory)
+        db.session.commit()
+        
+        return jsonify({
+            'code': 0,
+            'msg': '目录删除成功'
+        })
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'删除目录失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'删除目录失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/directory/<int:directory_id>/devices', methods=['GET'])
+def list_directory_devices(directory_id):
+    """查询目录下的设备列表"""
+    try:
+        directory = DeviceDirectory.query.get(directory_id)
+        if not directory:
+            return jsonify({'code': 400, 'msg': f'目录不存在: ID={directory_id}'}), 400
+        
+        # 获取请求参数
+        page_no = int(request.args.get('pageNo', 1))
+        page_size = int(request.args.get('pageSize', 10))
+        search = request.args.get('search', '').strip()
+        
+        # 参数验证
+        if page_no < 1 or page_size < 1:
+            return jsonify({'code': 400, 'msg': '参数错误：pageNo和pageSize必须为正整数'}), 400
+        
+        # 构建基础查询
+        query = Device.query.filter_by(directory_id=directory_id)
+        
+        # 添加搜索条件
+        if search:
+            search_pattern = f'%{search}%'
+            query = query.filter(
+                or_(
+                    Device.name.ilike(search_pattern),
+                    Device.model.ilike(search_pattern),
+                    Device.serial_number.ilike(search_pattern),
+                    Device.manufacturer.ilike(search_pattern),
+                    Device.ip.ilike(search_pattern)
+                )
+            )
+        
+        # 按修改时间降序排序
+        query = query.order_by(Device.updated_at.desc())
+        
+        # 执行分页查询
+        pagination = query.paginate(
+            page=page_no,
+            per_page=page_size,
+            error_out=False
+        )
+        
+        # 确保当前页的设备都有对应的抓拍空间和录像空间
+        for device in pagination.items:
+            try:
+                camera_service.ensure_device_spaces(device.id)
+            except Exception as e:
+                logger.warning(f'检查设备 {device.id} 空间时出错: {str(e)}')
+        
+        device_list = [_to_dict(device) for device in pagination.items]
+        
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': device_list,
+            'total': pagination.total
+        })
+    except ValueError:
+        return jsonify({'code': 400, 'msg': '参数类型错误：pageNo和pageSize需为整数'}), 400
+    except Exception as e:
+        logger.error(f'查询目录设备列表失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/device/<string:device_id>/directory', methods=['PUT'])
+def move_device_to_directory(device_id):
+    """移动设备到目录"""
+    try:
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'code': 400, 'msg': f'设备不存在: ID={device_id}'}), 400
+        data = request.get_json()
+        
+        # 检查参数是否存在（兼容处理：允许directory_id为None/null来解除关联）
+        if 'directory_id' not in data:
+            return jsonify({'code': 400, 'msg': 'directory_id参数不能为空'}), 400
+        
+        directory_id = data.get('directory_id')
+        
+        # 如果directory_id为None、null或0，表示解除关联（移动到根目录）
+        if directory_id is None or directory_id == 0:
+            device.directory_id = None
+        else:
+            # 验证目录是否存在
+            directory = DeviceDirectory.query.get(directory_id)
+            if not directory:
+                return jsonify({'code': 400, 'msg': '目录不存在'}), 400
+            device.directory_id = directory_id
+        
+        db.session.commit()
+        
+        return jsonify({
+            'code': 0,
+            'msg': '设备移动成功',
+            'data': {
+                'device_id': device.id,
+                'directory_id': device.directory_id
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'移动设备到目录失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'移动设备到目录失败: {str(e)}'}), 500
+
+
+@camera_bp.route('/directory/<int:directory_id>', methods=['GET'])
+def get_directory_info(directory_id):
+    """获取目录详情"""
+    try:
+        directory = DeviceDirectory.query.get(directory_id)
+        if not directory:
+            return jsonify({'code': 400, 'msg': f'目录不存在: ID={directory_id}'}), 400
+        
+        # 获取目录下的设备数量
+        device_count = Device.query.filter_by(directory_id=directory_id).count()
+        
+        # 获取子目录数量
+        children_count = DeviceDirectory.query.filter_by(parent_id=directory_id).count()
+        
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': {
+                'id': directory.id,
+                'name': directory.name,
+                'parent_id': directory.parent_id,
+                'description': directory.description,
+                'sort_order': directory.sort_order,
+                'device_count': device_count,
+                'children_count': children_count,
+                'created_at': directory.created_at.isoformat() if directory.created_at else None,
+                'updated_at': directory.updated_at.isoformat() if directory.updated_at else None
+            }
+        })
+    except Exception as e:
+        logger.error(f'获取目录详情失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+
+@camera_bp.route('/device/conflicts', methods=['GET'])
+def get_device_conflicts():
+    """获取正在使用的摄像头ID列表（用于推流转发或算法任务）"""
+    try:
+        task_type = request.args.get('task_type', '').strip()  # 'stream_forward' 或 'algorithm'
+        
+        conflict_device_ids = set()
+        
+        if task_type == 'stream_forward':
+            # 获取所有正在运行的算法任务使用的摄像头
+            running_algorithm_tasks = AlgorithmTask.query.filter(
+                and_(
+                    AlgorithmTask.is_enabled == True,
+                    AlgorithmTask.run_status == 'running'
+                )
+            ).all()
+            
+            for task in running_algorithm_tasks:
+                if task.devices:
+                    for device in task.devices:
+                        conflict_device_ids.add(device.id)
+        elif task_type == 'algorithm':
+            # 获取所有正在运行的推流转发任务使用的摄像头（只根据 is_enabled=True 判断）
+            running_stream_forward_tasks = StreamForwardTask.query.filter(
+                StreamForwardTask.is_enabled == True
+            ).all()
+            
+            for task in running_stream_forward_tasks:
+                if task.devices:
+                    for device in task.devices:
+                        conflict_device_ids.add(device.id)
+        else:
+            # 获取所有正在使用的摄像头（推流转发和算法任务）
+            running_algorithm_tasks = AlgorithmTask.query.filter(
+                and_(
+                    AlgorithmTask.is_enabled == True,
+                    AlgorithmTask.run_status == 'running'
+                )
+            ).all()
+            
+            running_stream_forward_tasks = StreamForwardTask.query.filter(
+                StreamForwardTask.is_enabled == True
+            ).all()
+            
+            for task in running_algorithm_tasks:
+                if task.devices:
+                    for device in task.devices:
+                        conflict_device_ids.add(device.id)
+            
+            for task in running_stream_forward_tasks:
+                if task.devices:
+                    for device in task.devices:
+                        conflict_device_ids.add(device.id)
+        
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': list(conflict_device_ids)
+        })
+    except Exception as e:
+        logger.error(f'获取摄像头冲突列表失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
