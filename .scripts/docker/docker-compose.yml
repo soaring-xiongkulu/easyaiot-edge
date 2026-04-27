@@ -1,0 +1,174 @@
+services:
+  # PostgresSQL 初始化容器（自动修复权限）
+  # 在 PostgreSQL 启动前自动运行，修复数据目录权限问题
+  # 解决 "could not open file global/pg_filenode.map: Permission denied" 错误
+  PostgresSQL-init:
+    image: postgres:18
+    container_name: postgres-init
+    user: "0:0"
+    volumes:
+      - ./db_data/data:/var/lib/postgresql/data:rw
+      - ./db_data/log:/var/log/postgresql:rw
+    command:
+      [
+        "/bin/bash",
+        "-c",
+        "mkdir -p /var/lib/postgresql/data /var/log/postgresql && chown -R 999:999 /var/lib/postgresql/data /var/log/postgresql && chmod -R 777 /var/lib/postgresql/data && chmod -R 777 /var/log/postgresql && echo '[PostgreSQL Init] 权限设置完成'",
+      ]
+    restart: "no"
+    networks:
+      - easyaiot-network
+
+  # PostgresSQL Server
+  PostgresSQL:
+    image: postgres:18
+    container_name: postgres-server
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      - TZ=Asia/Shanghai
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=iot45722414822
+      - POSTGRES_DB=postgres
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - ./db_data/data:/var/lib/postgresql/data:rw
+      - ./db_data/log:/var/log/postgresql:rw
+      # SQL 文件挂载（按字母顺序执行）
+      # 注意：确保 ../postgresql 目录存在，否则挂载会失败
+      - ../postgresql:/docker-entrypoint-initdb.d:rw
+      # 数据库初始化脚本（00- 前缀确保在 SQL 文件之前执行）
+      # 注意：确保 ./init-databases.sh 文件存在，否则挂载会失败
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/00-init-databases.sh:rw
+      # PostgreSQL entrypoint 脚本（自动修复权限）
+      # 注意：确保 ./postgresql-entrypoint.sh 文件存在，否则挂载会失败
+      # 使用相对路径（相对于 docker-compose.yml 所在目录）
+      - ./postgresql-entrypoint.sh:/postgresql-entrypoint.sh:ro
+    # 使用自定义 entrypoint，在启动前自动修复权限
+    # 容器以 root 启动，entrypoint 会修复权限后切换到 postgres 用户
+    # 这样可以自动解决 "could not open file global/pg_filenode.map: Permission denied" 错误
+    user: "0:0"
+    entrypoint: ["/bin/bash", "/postgresql-entrypoint.sh"]
+    # 设置 PostgreSQL 最大连接数为 10240（默认是 100）
+    # 注意：max_connections 需要根据系统资源调整，建议值：
+    # - 小型系统：200-300
+    # - 中型系统：500-800
+    # - 大型系统：1000+
+    # - 超大型系统：5000-10240
+    command: ["postgres", "-c", "max_connections=10240", "-c", "shared_buffers=256MB"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - easyaiot-network
+
+  # Redis Server
+  Redis:
+    image: redis:7.4.8
+    container_name: redis-server
+    restart: always
+    privileged: true
+    ports:
+      - "6379:6379"
+    environment:
+      - TZ=Asia/Shanghai
+    command: >
+      redis-server
+      --save 60 1000
+      --loglevel warning
+      --appendonly yes
+      --requirepass basiclab@iot975248395
+      --maxclients 10000
+      --timeout 300
+      --tcp-keepalive 60
+      --tcp-backlog 511
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - "./redis_data/data:/data:rw"
+      - "./redis_data/logs:/logs:rw"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "redis-cli -a basiclab@iot975248395 ping | grep PONG || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20M"
+        max-file: "10"
+    networks:
+      - easyaiot-network
+
+  # SRS Server
+  SRS:
+    image: ossrs/srs:5
+    container_name: srs-server
+    restart: always
+    network_mode: host # 使用host网络模式，直接使用宿主机网络
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - "./srs_data/conf:/usr/local/srs/conf:rw"
+      - "./srs_data/conf:/opt/srs/trunk/conf:rw"
+      # 使用用户目录，避免 macOS 绑定挂载 /data 时 Docker Desktop 报 mounts denied（/data 非默认共享且根卷只读）
+      - "${HOME}/srs_data:/data:rw"
+    command: ["./objs/srs", "-c", "conf/docker.conf"]
+    working_dir: /usr/local/srs
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -f http://localhost:1985/api/v1/versions || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Node-RED Server
+  NodeRED:
+    image: nodered/node-red:latest
+    container_name: nodered-server
+    restart: always
+    ports:
+      - "1880:1880"
+    environment:
+      - TZ=Asia/Shanghai
+      - NODE_OPTIONS=--max-old-space-size=512
+    user: "1000:1000"
+    volumes:
+      - "./nodered_data/data:/data:rw"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:1880/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - easyaiot-network
+
+# 磁盘挂载
+volumes:
+  db_data:
+    driver: local
+  redis_data:
+    driver: local
+  srs_data:
+    driver: local
+  nodered_data:
+    driver: local
+
+# 网络配置
+# 注意：当宿主机IP发生变化后，如果容器无法加入网络，请执行以下命令修复：
+# 1. docker network rm easyaiot-network
+# 2. docker network create easyaiot-network
+# 3. docker-compose restart
+networks:
+  easyaiot-network:
+    name: easyaiot-network
+    external: true

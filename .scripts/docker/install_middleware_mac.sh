@@ -1,0 +1,357 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# EasyAIoT 中间件一键脚本 (macOS)
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
+ok()    { echo -e "${GREEN}[OK]${NC}   $1"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
+err()   { echo -e "${RED}[ERR]${NC}  $1" >&2; }
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
+NETWORK_NAME="easyaiot-network"
+ARCH_FILE="${SCRIPT_DIR}/.env.arch"
+ENV_FILE="${SCRIPT_DIR}/.env.docker"
+COMPOSE_CMD=()
+DOCKER_PLATFORM=""
+BASE_IMAGE=""
+
+ensure_env_var() {
+  local key="$1" value="$2"
+  grep -q "^${key}=" "${ENV_FILE}" 2>/dev/null && return
+  if [[ -s "${ENV_FILE}" ]]; then
+    tail -c1 "${ENV_FILE}" 2>/dev/null | grep -q $'\n' || printf '\n' >> "${ENV_FILE}"
+  fi
+  echo "${key}=${value}" >> "${ENV_FILE}"
+}
+
+SERVICES=(PostgresSQL Redis MinIO SRS NodeRED)
+
+service_port() {
+  case "$1" in
+    PostgresSQL) echo 5432 ;;
+    Redis) echo 6379 ;;
+    MinIO) echo 9000 ;;
+    SRS) echo 1935 ;;
+    NodeRED) echo 1880 ;;
+    *) echo "" ;;
+  esac
+}
+
+service_health() {
+  case "$1" in
+    MinIO) echo "/minio/health/live" ;;
+    SRS) echo "/api/v1/versions" ;;
+    NodeRED) echo "/" ;;
+    *) echo "" ;;
+  esac
+}
+
+require_macos() {
+  [[ "${OSTYPE}" == darwin* ]] || { err "仅支持 macOS"; exit 1; }
+}
+
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 || {
+    err "未检测到 Docker Desktop，请先安装 https://www.docker.com/products/docker-desktop"; exit 1; }
+  docker info >/dev/null 2>&1 && return
+  warn "Docker daemon 未运行，尝试打开 Docker Desktop..."
+  open -a Docker >/dev/null 2>&1 || true
+  for _ in {1..30}; do
+    sleep 2
+    docker info >/dev/null 2>&1 && { ok "Docker Desktop 已就绪"; return; }
+  done
+  err "仍无法连接 Docker daemon，请手动启动 Docker Desktop 后重试"
+  exit 1
+}
+
+ensure_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker-compose)
+  else
+    err "未检测到 docker compose，请安装 Docker Desktop 或运行 brew install docker-compose"
+    exit 1
+  fi
+}
+
+compose() {
+  local env_args=()
+  [[ -f "${ENV_FILE}" ]] && env_args=(--env-file "${ENV_FILE}")
+  (cd "${SCRIPT_DIR}" && \
+    DOCKER_PLATFORM="${DOCKER_PLATFORM}" \
+    BASE_IMAGE="${BASE_IMAGE}" \
+    "${COMPOSE_CMD[@]}" "${env_args[@]}" -f "${COMPOSE_FILE}" "$@")
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) DOCKER_PLATFORM="linux/amd64" ;;
+    arm64|aarch64) DOCKER_PLATFORM="linux/arm64" ;;
+    *) err "不支持的架构"; exit 1 ;;
+  esac
+  BASE_IMAGE="pytorch/pytorch:2.1.0-cpu"
+  cat > "${ARCH_FILE}" <<EOF_ARCH
+DOCKER_PLATFORM=${DOCKER_PLATFORM}
+BASE_IMAGE=${BASE_IMAGE}
+EOF_ARCH
+  ok "架构配置: ${DOCKER_PLATFORM}"
+}
+
+ensure_dirs() {
+  local dirs=(
+    "data/uploads" "data/datasets" "data/models" "data/inference_results"
+    "static/models" "temp_uploads" "model"
+    "db_data" "redis_data" "minio_data" "srs_data" "nodered_data"
+  )
+  for d in "${dirs[@]}"; do mkdir -p "${SCRIPT_DIR}/${d}"; done
+  # SRS 容器绑定 ${HOME}/srs_data -> /data（见 docker-compose.yml），须存在且位于 Docker Desktop 默认可共享路径下
+  mkdir -p "${HOME}/srs_data"
+}
+
+ensure_env() {
+  local example="${SCRIPT_DIR}/env.example"
+  [[ -f "$example" ]] || { err "缺少 env.example"; exit 1; }
+  [[ -f "${ENV_FILE}" ]] || cp "$example" "${ENV_FILE}"
+  ensure_env_var "POSTGRES_PASSWORD" "iot45722414822"
+  ensure_env_var "DATABASE_URL" "postgresql://postgres:\${POSTGRES_PASSWORD}@PostgresSQL:5432/iot-edge-ai20"
+  ensure_env_var "MINIO_ENDPOINT" "MinIO:9000"
+  ensure_env_var "MINIO_SECRET_KEY" "basiclab@iot975248395"
+  ensure_env_var "REDIS_PASSWORD" "basiclab@iot975248395"
+  ok ".env.docker 已准备"
+}
+
+ensure_network() {
+  docker network inspect "${NETWORK_NAME}" >/dev/null 2>&1 && return
+  info "创建网络 ${NETWORK_NAME}"
+  docker network create "${NETWORK_NAME}" >/dev/null
+}
+
+# 获取 Docker 网络网关 IP（用于容器访问宿主机服务）
+get_docker_network_gateway() {
+  local network_name="${1:-easyaiot-network}"
+  local gateway_ip=""
+  
+  # 方法1: 如果网络已存在，直接获取网关IP
+  if docker network inspect "$network_name" >/dev/null 2>&1; then
+    gateway_ip=$(docker network inspect "$network_name" --format='{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null | head -n 1)
+    if [[ -n "$gateway_ip" && "$gateway_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$gateway_ip"
+      return 0
+    fi
+  fi
+  
+  # 方法2: 如果网络不存在，尝试创建网络后获取
+  if ! docker network inspect "$network_name" >/dev/null 2>&1; then
+    if docker network create "$network_name" >/dev/null 2>&1; then
+      gateway_ip=$(docker network inspect "$network_name" --format='{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null | head -n 1)
+      if [[ -n "$gateway_ip" && "$gateway_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$gateway_ip"
+        return 0
+      fi
+    fi
+  fi
+  
+  # 方法3: macOS上使用host.docker.internal（如果可用）
+  if ping -c 1 host.docker.internal >/dev/null 2>&1; then
+    # 在macOS上，容器可以通过host.docker.internal访问宿主机
+    # 但SRS配置需要IP地址，所以尝试解析
+    local resolved_ip=$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}' | head -n 1)
+    if [[ -n "$resolved_ip" && "$resolved_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$resolved_ip"
+      return 0
+    fi
+  fi
+  
+  # 方法4: 使用常见的Docker网络网关IP
+  echo "172.18.0.1"
+  return 0
+}
+
+copy_srs_conf() {
+  local src="${SCRIPT_DIR}/../srs/conf"
+  local dst="${SCRIPT_DIR}/srs_data/conf"
+  local target="${dst}/docker.conf"
+  
+  if [[ ! -f "${src}/docker.conf" ]]; then
+    warn "未找到默认 SRS 配置 (${src}/docker.conf)"
+    return
+  fi
+  
+  mkdir -p "$dst"
+  
+  # 获取 Docker 网络网关 IP（用于Gateway服务，如果Gateway在宿主机运行）
+  local gateway_ip=$(get_docker_network_gateway "${NETWORK_NAME}")
+  if [[ -z "$gateway_ip" ]]; then
+    warn "无法获取 Docker 网络网关 IP，将使用 172.18.0.1"
+    gateway_ip="172.18.0.1"
+  else
+    info "检测到 Docker 网络网关 IP: $gateway_ip"
+  fi
+  
+  # 复制配置文件
+  cp -R "${src}/." "$dst/"
+  
+  # 更新配置文件中的 Gateway 地址（48080端口）
+  if [[ -f "$target" ]]; then
+    # macOS使用BSD sed，需要指定备份扩展名
+    if sed -i '' -E "s|http://([0-9]{1,3}\.){3}[0-9]{1,3}:48080|http://${gateway_ip}:48080|g" "$target" 2>/dev/null; then
+      info "已将配置文件中的 Gateway 地址更新为: $gateway_ip:48080"
+      ok "SRS 配置已复制并更新"
+    else
+      # 如果sed -i失败，使用临时文件
+      local temp_file=$(mktemp)
+      if sed -E "s|http://([0-9]{1,3}\.){3}[0-9]{1,3}:48080|http://${gateway_ip}:48080|g" "$target" > "$temp_file" 2>/dev/null; then
+        mv "$temp_file" "$target"
+        info "已将配置文件中的 Gateway 地址更新为: $gateway_ip:48080"
+        ok "SRS 配置已复制并更新"
+      else
+        rm -f "$temp_file"
+        warn "无法更新 SRS 配置中的 IP 地址，使用原始配置"
+        ok "SRS 配置已复制"
+      fi
+    fi
+  else
+    ok "SRS 配置已复制"
+  fi
+}
+
+ensure_ready() {
+  require_macos
+  ensure_docker
+  ensure_compose
+  detect_arch
+  ensure_dirs
+  ensure_env
+  ensure_network
+  copy_srs_conf
+}
+
+cmd_install() {
+  ensure_ready
+  info "构建镜像..."
+  compose build --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg DOCKER_PLATFORM="${DOCKER_PLATFORM}"
+  info "启动服务..."
+  compose up -d
+  sleep 5
+  bash "${SCRIPT_DIR}/set_permanent_token.sh" >/dev/null 2>&1 || true
+  ok "安装完成"
+  cmd_status
+}
+
+cmd_start()  { ensure_ready; info "启动服务..."; compose up -d; sleep 5; bash "${SCRIPT_DIR}/set_permanent_token.sh" >/dev/null 2>&1 || true; ok "已启动"; }
+cmd_stop()   { ensure_ready; info "停止服务..."; compose down; ok "已停止"; }
+cmd_restart(){ ensure_ready; info "重启服务..."; compose down; compose up -d; sleep 5; bash "${SCRIPT_DIR}/set_permanent_token.sh" >/dev/null 2>&1 || true; ok "已重启"; }
+cmd_status() { ensure_ready; compose ps; echo ""; docker ps --filter "name=ai-service" --format "table {{.Names}}\t{{.Status}}"; }
+
+cmd_logs() {
+  ensure_ready
+  if [[ "${1:-}" = "-f" || "${1:-}" = "--follow" ]]; then
+    shift || true
+    compose logs -f "$@"
+  else
+    compose logs --tail=100 "$@"
+  fi
+}
+
+cmd_build()  { ensure_ready; compose build --no-cache --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg DOCKER_PLATFORM="${DOCKER_PLATFORM}"; ok "构建完成"; }
+cmd_clean()  {
+  ensure_ready
+  read -r -p "将删除容器/卷/ai-service 镜像，确认？(y/N) " resp
+  [[ "$resp" =~ ^[Yy]([Ee][Ss])?$ ]] || { warn "已取消"; return; }
+  compose down -v --remove-orphans
+  docker rmi ai-service:latest >/dev/null 2>&1 || true
+  ok "清理完成"
+}
+cmd_update() {
+  ensure_ready
+  info "拉取最新代码..."
+  (cd "${SCRIPT_DIR}" && git pull || warn "git pull 失败，继续使用现有代码")
+  info "重新构建并启动..."
+  compose build --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg DOCKER_PLATFORM="${DOCKER_PLATFORM}"
+  compose up -d
+  sleep 5
+  bash "${SCRIPT_DIR}/set_permanent_token.sh" >/dev/null 2>&1 || true
+  ok "更新完成"
+  cmd_status
+}
+
+wait_for_health() {
+  local port="$1" path="$2"
+  for _ in {1..60}; do
+    if curl -fs "http://localhost:${port}${path}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+cmd_verify() {
+  ensure_ready
+  local ok_count=0
+  for svc in "${SERVICES[@]}"; do
+    local port path
+    port=$(service_port "$svc")
+    path=$(service_health "$svc")
+    info "验证 ${svc} (:${port})"
+    if [[ -n "$path" ]]; then
+      if wait_for_health "$port" "$path"; then
+        ok "${svc} 健康"
+        ok_count=$((ok_count + 1))
+      else
+        warn "${svc} 未通过健康检查"
+      fi
+    else
+      if nc -z localhost "$port" >/dev/null 2>&1; then
+        ok "${svc} 端口就绪"
+        ok_count=$((ok_count + 1))
+      else
+        warn "${svc} 端口未开启"
+      fi
+    fi
+  done
+  info "通过 ${ok_count}/${#SERVICES[@]}"
+  [[ $ok_count -eq ${#SERVICES[@]} ]] || exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+EasyAIoT 中间件脚本 (macOS)
+  install   构建并启动全部服务
+  start     启动服务
+  stop      停止服务
+  restart   重启服务
+  status    查看状态
+  logs [-f] 查看日志
+  build     重新构建镜像
+  clean     清理容器/卷
+  update    git pull + rebuild + restart
+  verify    健康检查各服务
+  help      查看帮助
+USAGE
+}
+
+case "${1:-help}" in
+  install) cmd_install ;;
+  start)   cmd_start ;;
+  stop)    cmd_stop ;;
+  restart) cmd_restart ;;
+  status)  cmd_status ;;
+  logs)    shift || true; cmd_logs "$@" ;;
+  build)   cmd_build ;;
+  clean)   cmd_clean ;;
+  update)  cmd_update ;;
+  verify)  cmd_verify ;;
+  help|-h|--help) usage ;;
+  *) err "未知命令: $1"; usage; exit 1 ;;
+esac
