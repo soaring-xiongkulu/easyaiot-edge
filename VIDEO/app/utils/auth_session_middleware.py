@@ -65,6 +65,17 @@ def _is_public_media_get(path: str, method: str) -> bool:
 def _should_skip_path(path: str) -> bool:
     if request.method == 'OPTIONS':
         return True
+    # 内部服务心跳：由本机守护进程/子进程上报，不携带用户态 token
+    # 默认放行，避免会话校验导致 401 造成服务被误判异常
+    if path in (
+        '/video/stream-forward/heartbeat',
+        '/video/algorithm/heartbeat/realtime',
+        '/video/algorithm/heartbeat/snap',
+        '/video/algorithm/heartbeat/extractor',
+        '/video/algorithm/heartbeat/sorter',
+        '/video/algorithm/heartbeat/pusher',
+    ):
+        return True
     if _is_bucket_objects_download(path):
         return True
     if _is_public_media_get(path, request.method):
