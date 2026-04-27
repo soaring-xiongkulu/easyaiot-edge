@@ -1,0 +1,29 @@
+package com.basiclab.iot.system;
+
+
+import com.basiclab.iot.common.annotation.EnableCustomSwagger2;
+import com.basiclab.iot.common.annotations.EnableCustomConfig;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.bind.annotation.CrossOrigin;
+
+/**
+ * SystemServerApplication
+ *
+ * @author 翱翔的雄库鲁
+ * @email andywebjava@163.com
+ * @wechat EasyAIoT2025
+ */
+@Slf4j
+@EnableCustomConfig
+@EnableCustomSwagger2
+@CrossOrigin(origins = "*", maxAge = 3600)
+@SpringBootApplication(scanBasePackages = {"com.basiclab.iot"})
+public class SystemServerApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(SystemServerApplication.class, args);
+    }
+
+}

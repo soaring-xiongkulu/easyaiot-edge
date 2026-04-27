@@ -1,0 +1,95 @@
+package com.basiclab.iot.system.controller.admin.notice;
+
+import cn.hutool.core.lang.Assert;
+import com.basiclab.iot.common.domain.CommonResult;
+import com.basiclab.iot.common.domain.PageResult;
+import com.basiclab.iot.common.utils.object.BeanUtils;
+import com.basiclab.iot.system.controller.admin.notice.vo.NoticePageReqVO;
+import com.basiclab.iot.system.controller.admin.notice.vo.NoticeRespVO;
+import com.basiclab.iot.system.controller.admin.notice.vo.NoticeSaveReqVO;
+import com.basiclab.iot.system.dal.dataobject.notice.NoticeDO;
+import com.basiclab.iot.system.service.notice.NoticeService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
+
+import javax.annotation.Resource;
+import javax.validation.Valid;
+
+import static com.basiclab.iot.common.domain.CommonResult.success;
+
+/**
+ * NoticeController
+ *
+ * @author 翱翔的雄库鲁
+ * @email andywebjava@163.com
+ * @wechat EasyAIoT2025
+ */
+@Tag(name = "管理后台 - 通知公告")
+@RestController
+@RequestMapping("/system/notice")
+@Validated
+@Slf4j
+public class NoticeController {
+
+    @Resource
+    private NoticeService noticeService;
+
+    @PostMapping("/create")
+    @Operation(summary = "创建通知公告")
+    //@PreAuthorize("@ss.hasPermission('system:notice:create')")
+    public CommonResult<Long> createNotice(@Valid @RequestBody NoticeSaveReqVO createReqVO) {
+        Long noticeId = noticeService.createNotice(createReqVO);
+        return success(noticeId);
+    }
+
+    @PutMapping("/update")
+    @Operation(summary = "修改通知公告")
+    //@PreAuthorize("@ss.hasPermission('system:notice:update')")
+    public CommonResult<Boolean> updateNotice(@Valid @RequestBody NoticeSaveReqVO updateReqVO) {
+        noticeService.updateNotice(updateReqVO);
+        return success(true);
+    }
+
+    @DeleteMapping("/delete")
+    @Operation(summary = "删除通知公告")
+    @Parameter(name = "id", description = "编号", required = true, example = "1024")
+    //@PreAuthorize("@ss.hasPermission('system:notice:delete')")
+    public CommonResult<Boolean> deleteNotice(@RequestParam("id") Long id) {
+        noticeService.deleteNotice(id);
+        return success(true);
+    }
+
+    @GetMapping("/page")
+    @Operation(summary = "获取通知公告列表")
+    //@PreAuthorize("@ss.hasPermission('system:notice:query')")
+    public CommonResult<PageResult<NoticeRespVO>> getNoticePage(@Validated NoticePageReqVO pageReqVO) {
+        PageResult<NoticeDO> pageResult = noticeService.getNoticePage(pageReqVO);
+        return success(BeanUtils.toBean(pageResult, NoticeRespVO.class));
+    }
+
+    @GetMapping("/get")
+    @Operation(summary = "获得通知公告")
+    @Parameter(name = "id", description = "编号", required = true, example = "1024")
+    //@PreAuthorize("@ss.hasPermission('system:notice:query')")
+    public CommonResult<NoticeRespVO> getNotice(@RequestParam("id") Long id) {
+        NoticeDO notice = noticeService.getNotice(id);
+        return success(BeanUtils.toBean(notice, NoticeRespVO.class));
+    }
+
+    @PostMapping("/push")
+    @Operation(summary = "推送通知公告", description = "只发送给 websocket 连接在线的用户")
+    @Parameter(name = "id", description = "编号", required = true, example = "1024")
+    //@PreAuthorize("@ss.hasPermission('system:notice:update')")
+    public CommonResult<Boolean> push(@RequestParam("id") Long id) {
+        NoticeDO notice = noticeService.getNotice(id);
+        Assert.notNull(notice, "公告不能为空");
+        // 原 infra 模块 WebSocket 推送已移除；若需实时推送请接入独立消息通道
+        log.debug("[push][noticeId={}] 跳过 WebSocket 推送（无 infra）", id);
+        return success(true);
+    }
+
+}

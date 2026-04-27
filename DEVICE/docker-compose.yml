@@ -1,0 +1,39 @@
+# DEVICE：仅编排 iot-system（system-server）
+# 依赖：外部 Docker 网络 easyaiot-network 上需能解析 PostgresSQL、Redis 等中间件服务名
+
+services:
+  iot-system:
+    image: iot-module-system-biz:latest
+    container_name: iot-system
+    user: root
+    environment:
+      - TZ=Asia/Shanghai
+      - JAVA_OPTS=-Xms512m -Xmx512m
+      - SPRING_PROFILES_ACTIVE=local
+      - SPRING_DATASOURCE_DYNAMIC_DATASOURCE_MASTER_URL=jdbc:postgresql://PostgresSQL:5432/ruoyi-vue-pro20?autoReconnect=true&autoReconnectForPools=true&useUnicode=true&characterEncoding=utf8&createDatabaseIfNotExist=true&allowMultiQueries=true&zeroDateTimeBehavior=convertToNull&stringtype=unspecified
+      - SPRING_REDIS_HOST=Redis
+      # Feign 调用 infra：未部署 iot-infra 时可注释；若在宿主机运行 infra，可配合 extra_hosts 使用 host.docker.internal
+      - IOT_RPC_INFRA_BASE_URL=http://host.docker.internal:48082
+      # SkyWalking（按需取消注释）
+      # - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar
+      # - SW_AGENT_NAME=iot-system
+      # - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      # - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${HOME}/docker/iot-device/logs:/root/logs/
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:48099"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: always
+    networks:
+      - easyaiot-network
+
+networks:
+  easyaiot-network:
+    name: easyaiot-network
+    external: true
