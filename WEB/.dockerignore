@@ -1,0 +1,57 @@
+# 依赖目录
+node_modules
+.pnpm-store
+
+# 构建产物（构建阶段不需要，生产阶段会从构建阶段复制）
+dist
+
+# 压缩文件
+dist.zip
+
+# 日志文件
+logs
+*.log
+
+# 环境文件
+# 注意：.env、.env.development、.env.production 等文件需要在构建时使用，所以不能排除
+# 只排除本地开发用的覆盖文件（这些文件不应该进入容器）
+.env.local
+.env.*.local
+
+# IDE配置
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# 锁定文件（不使用锁定文件，让容器内重新生成）
+pnpm-lock.yaml
+
+# Git相关
+.git
+.gitignore
+.gitattributes
+
+# Docker相关
+Dockerfile
+docker-compose.yaml
+.dockerignore
+
+# 文档
+README.md
+README_en.md
+TROUBLESHOOTING.md
+*.md
+
+# 测试文件
+**/__tests__/**
+**/*.test.*
+**/*.spec.*
+
+# 其他
+.DS_Store
+Thumbs.db
+*.zip
+*.tar.gz
+
