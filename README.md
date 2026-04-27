@@ -1,7 +1,7 @@
 # EasyAIoT Edge (Edge Intelligent Algorithm Application Platform)
 
-[![Gitee star](https://gitee.com/volara/easyaiot/badge/star.svg?theme=gvp)](https://gitee.com/soaring-xiongkulu/easyaiot/stargazers)
-[![Gitee fork](https://gitee.com/volara/easyaiot/badge/fork.svg?theme=gvp)](https://gitee.com/soaring-xiongkulu/easyaiot/members)
+[![Gitee star](https://gitee.com/volara/easyaiot-edge/badge/star.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/stargazers)
+[![Gitee fork](https://gitee.com/volara/easyaiot-edge/badge/fork.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/members)
 
 <p style="font-size: 16px; line-height: 1.8; color: #555; font-weight: 400; margin: 20px 0;">
   <strong>An AI platform purpose-built for the edge, fully open-source under the MIT license.</strong> Breaking the hardware lock-in of current edge platforms — no need to purchase any proprietary devices, memory footprint controlled under 4GB. Everyone can become an AI edge expert. From cameras to alert closed-loop, AI should not be confined to cloud giants, nor locked by hardware vendors; with the MIT license, you have no worries.

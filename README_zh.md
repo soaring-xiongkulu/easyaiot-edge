@@ -1,7 +1,7 @@
 # EasyAIoT Edge（边缘智能算法应用平台）
 
-[![Gitee star](https://gitee.com/volara/easyaiot/badge/star.svg?theme=gvp)](https://gitee.com/soaring-xiongkulu/easyaiot/stargazers)
-[![Gitee fork](https://gitee.com/volara/easyaiot/badge/fork.svg?theme=gvp)](https://gitee.com/soaring-xiongkulu/easyaiot/members)
+[![Gitee star](https://gitee.com/volara/easyaiot-edge/badge/star.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/stargazers)
+[![Gitee fork](https://gitee.com/volara/easyaiot-edge/badge/fork.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/members)
 
 <p style="font-size: 16px; line-height: 1.8; color: #555; font-weight: 400; margin: 20px 0;">
   <strong>专为边缘打造的 AI 平台，MIT 协议完全开源。</strong> 打破当前边缘平台捆绑硬件的局面——无需购买任何专用设备，内存控制在 4GB 内，人人都是 AI 边缘大师。从摄像头到告警闭环，AI 不应只属于云端的庞然大物，更不该被硬件厂商锁定；MIT 协议，没有后顾之忧。
