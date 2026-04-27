@@ -1,0 +1,248 @@
+"""
+@author 翱翔的雄库鲁
+@email andywebjava@163.com
+@wechat EasyAIoT2025
+"""
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+import pytz
+
+db = SQLAlchemy()
+
+# 时区设置
+BEIJING_TZ = pytz.timezone('Asia/Shanghai')
+
+def beijing_now():
+    """获取当前北京时间（无时区信息的datetime对象，用于数据库存储）"""
+    beijing_dt = datetime.now(BEIJING_TZ)
+    # 返回无时区信息的datetime对象，因为数据库字段不支持时区
+    return beijing_dt.replace(tzinfo=None)
+
+class Model(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    description = db.Column(db.Text)
+    model_path = db.Column(db.String(500), nullable=True)
+    image_url = db.Column(db.String(500))
+    version = db.Column(db.String(20), default="V1.0.0")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 导出模型路径字段
+    onnx_model_path = db.Column(db.String(500))
+    torchscript_model_path = db.Column(db.String(500))
+    tensorrt_model_path = db.Column(db.String(500))
+    openvino_model_path = db.Column(db.String(500))
+
+    # 关系定义
+    export_records = db.relationship('ExportRecord', back_populates='model', cascade='all, delete-orphan')
+
+class ExportRecord(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    model_id = db.Column(db.Integer, db.ForeignKey('model.id'), nullable=False)
+    model_name = db.Column(db.String(100))  # 模型名称
+    format = db.Column(db.String(50), nullable=False)
+    minio_path = db.Column(db.String(500))
+    local_path = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=beijing_now)  # 使用北京时间
+    status = db.Column(db.String(20), default='PENDING')  # 新增状态字段
+    message = db.Column(db.Text)  # 新增错误信息字段
+    model = db.relationship('Model', back_populates='export_records')
+
+class InferenceTask(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    model_id = db.Column(db.Integer, db.ForeignKey('model.id'), nullable=True)
+    inference_type = db.Column(db.String(20), nullable=False)  # image/video/rtsp
+    input_source = db.Column(db.String(500))  # 原始文件路径或RTSP地址
+    output_path = db.Column(db.String(500))  # 处理后文件在Minio的路径
+    processed_frames = db.Column(db.Integer)  # 视频/流处理帧数
+    start_time = db.Column(db.DateTime, default=datetime.utcnow)
+    end_time = db.Column(db.DateTime)
+    status = db.Column(db.String(20), default='PROCESSING')  # PROCESSING/COMPLETED/FAILED
+    error_message = db.Column(db.Text)
+    processing_time = db.Column(db.Float)  # 单位：秒
+    stream_output_url = db.Column(db.String(500))
+
+class OCRResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    text = db.Column(db.Text, nullable=False)  # 识别出的文本
+    confidence = db.Column(db.Float)  # 置信度
+    bbox = db.Column(db.JSON)  # 边界框坐标 [x1, y1, x2, y2]
+    polygon = db.Column(db.JSON)  # 多边形坐标 [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+    page_num = db.Column(db.Integer, default=1)  # 页码
+    line_num = db.Column(db.Integer)  # 行号
+    word_num = db.Column(db.Integer)  # 单词序号
+    image_url = db.Column(db.String(500))  # 新增：图片在OSS中的URL
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'id': self.id,
+            'text': self.text,
+            'confidence': self.confidence,
+            'bbox': self.bbox,
+            'polygon': self.polygon,
+            'page_num': self.page_num,
+            'line_num': self.line_num,
+            'word_num': self.word_num,
+            'image_url': self.image_url,  # 新增
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class SpeechRecord(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.String(100), unique=True, nullable=False)  # 订单ID
+    audio_file_path = db.Column(db.String(500))  # 音频文件在Minio的路径
+    filename = db.Column(db.String(255), nullable=False)  # 原始文件名
+    file_size = db.Column(db.Integer, nullable=False)  # 文件大小(字节)
+    duration = db.Column(db.Integer, nullable=False)  # 音频时长(秒)
+    recognized_text = db.Column(db.Text)  # 识别出的文本
+    confidence = db.Column(db.Float)  # 整体置信度
+    status = db.Column(db.String(20), default='UPLOADED')  # 状态: UPLOADED/PROCESSING/COMPLETED/FAILED
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)  # 创建时间
+    completed_at = db.Column(db.DateTime)  # 完成时间
+    error_message = db.Column(db.Text)
+
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'id': self.id,
+            'order_id': self.order_id,
+            'filename': self.filename,
+            'file_size': self.file_size,
+            'duration': self.duration,
+            'recognized_text': self.recognized_text,
+            'confidence': self.confidence,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'error_message': self.error_message
+        }
+
+    def __repr__(self):
+        return f'<SpeechRecord {self.filename} ({self.status})>'
+
+
+class AIService(db.Model):
+    """AI服务表，用于维护所有部署的AI服务"""
+    id = db.Column(db.Integer, primary_key=True)
+    model_id = db.Column(db.Integer, db.ForeignKey('model.id'), nullable=True)  # 关联的模型ID（可空，支持心跳自动创建）
+    service_name = db.Column(db.String(100), nullable=False)  # 服务名称（允许重复，支持同一服务名称的多个实例）
+    server_ip = db.Column(db.String(50))  # 部署的服务器IP
+    port = db.Column(db.Integer)  # 服务端口
+    inference_endpoint = db.Column(db.String(200))  # 推理接口地址
+    status = db.Column(db.String(20), default='stopped')  # 状态: running/stopped/error
+    mac_address = db.Column(db.String(50))  # MAC地址
+    deploy_time = db.Column(db.DateTime, default=beijing_now)  # 部署时间
+    last_heartbeat = db.Column(db.DateTime)  # 最后上报时间
+    process_id = db.Column(db.Integer)  # 进程ID
+    log_path = db.Column(db.String(500))  # 日志文件路径
+    model_version = db.Column(db.String(20))  # 模型版本号
+    format = db.Column(db.String(50))  # 模型格式 (onnx, openvino, pytorch等)
+    created_at = db.Column(db.DateTime, default=beijing_now)
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now)
+    
+    # 关系定义
+    model = db.relationship('Model', backref=db.backref('ai_services', lazy='dynamic'))
+    
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'id': self.id,
+            'model_id': self.model_id,
+            'service_name': self.service_name,
+            'server_ip': self.server_ip,
+            'port': self.port,
+            'inference_endpoint': self.inference_endpoint,
+            'status': self.status,
+            'mac_address': self.mac_address,
+            'deploy_time': self.deploy_time.isoformat() if self.deploy_time else None,
+            'last_heartbeat': self.last_heartbeat.isoformat() if self.last_heartbeat else None,
+            'process_id': self.process_id,
+            'log_path': self.log_path,
+            'model_version': self.model_version,
+            'format': self.format,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+    
+    def __repr__(self):
+        return f'<AIService {self.service_name} ({self.status})>'
+
+
+class AutoLabelTask(db.Model):
+    """自动化标注任务表"""
+    __tablename__ = 'auto_label_task'
+    
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    dataset_id = db.Column(db.BigInteger, nullable=False, comment='数据集ID')
+    model_service_id = db.Column(db.Integer, db.ForeignKey('ai_service.id'), nullable=True, comment='AI服务ID')
+    status = db.Column(db.String(20), default='PENDING', nullable=False, comment='状态[PENDING:待处理,PROCESSING:处理中,COMPLETED:已完成,FAILED:失败]')
+    total_images = db.Column(db.Integer, default=0, comment='总图片数')
+    processed_images = db.Column(db.Integer, default=0, comment='已处理图片数')
+    success_count = db.Column(db.Integer, default=0, comment='成功标注数')
+    failed_count = db.Column(db.Integer, default=0, comment='失败数')
+    confidence_threshold = db.Column(db.Float, default=0.5, comment='置信度阈值')
+    created_at = db.Column(db.DateTime, default=beijing_now, comment='创建时间')
+    updated_at = db.Column(db.DateTime, default=beijing_now, onupdate=beijing_now, comment='更新时间')
+    started_at = db.Column(db.DateTime, nullable=True, comment='开始时间')
+    completed_at = db.Column(db.DateTime, nullable=True, comment='完成时间')
+    error_message = db.Column(db.Text, nullable=True, comment='错误信息')
+    
+    # 关系定义
+    model_service = db.relationship('AIService', backref=db.backref('auto_label_tasks', lazy='dynamic'))
+    
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'id': self.id,
+            'dataset_id': self.dataset_id,
+            'model_service_id': self.model_service_id,
+            'status': self.status,
+            'total_images': self.total_images,
+            'processed_images': self.processed_images,
+            'success_count': self.success_count,
+            'failed_count': self.failed_count,
+            'confidence_threshold': self.confidence_threshold,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'error_message': self.error_message
+        }
+    
+    def __repr__(self):
+        return f'<AutoLabelTask {self.id} ({self.status})>'
+
+
+class AutoLabelResult(db.Model):
+    """自动化标注结果表"""
+    __tablename__ = 'auto_label_result'
+    
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    task_id = db.Column(db.Integer, db.ForeignKey('auto_label_task.id'), nullable=False, comment='任务ID')
+    dataset_image_id = db.Column(db.BigInteger, nullable=False, comment='数据集图片ID')
+    annotations = db.Column(db.Text, nullable=True, comment='标注结果JSON')
+    status = db.Column(db.String(20), default='SUCCESS', nullable=False, comment='状态[SUCCESS:成功,FAILED:失败]')
+    error_message = db.Column(db.Text, nullable=True, comment='错误信息')
+    created_at = db.Column(db.DateTime, default=beijing_now, comment='创建时间')
+    
+    # 关系定义
+    task = db.relationship('AutoLabelTask', backref=db.backref('results', lazy='dynamic'))
+    
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'dataset_image_id': self.dataset_image_id,
+            'annotations': self.annotations,
+            'status': self.status,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+    
+    def __repr__(self):
+        return f'<AutoLabelResult {self.id} ({self.status})>'
