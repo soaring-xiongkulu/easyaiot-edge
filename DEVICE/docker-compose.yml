@@ -5,6 +5,9 @@ services:
   iot-system:
     image: iot-module-system-biz:latest
     container_name: iot-system
+    ports:
+      - "48080:48099"
+      - "48099:48099" 
     user: root
     environment:
       - TZ=Asia/Shanghai

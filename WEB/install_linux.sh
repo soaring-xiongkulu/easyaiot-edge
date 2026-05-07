@@ -467,6 +467,10 @@ install_service() {
         exit 1
     fi
     
+    # 将 host-gateway 改为宿主机实际 IP
+    HOST_IP=$(hostname -I | awk '{print $1}')
+    sed -i "s/host-gateway/${HOST_IP}/g" docker-compose.yml
+
     # 注意：前端构建现在在Docker容器内完成，不再需要在宿主机上构建
     print_info "前端构建将在Docker容器内自动完成"
     
