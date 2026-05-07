@@ -11,8 +11,17 @@ from datetime import datetime
 from typing import Dict
 
 from flask import current_app
-from kafka import KafkaProducer
-from kafka.errors import KafkaError
+
+# Kafka 是可选功能
+
+try:
+    from kafka import KafkaProducer
+    from kafka.errors import KafkaError
+    _KAFKA_AVAILABLE = True
+except ImportError:
+    KafkaProducer = None
+    KafkaError = Exception
+    _KAFKA_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +36,9 @@ _kafka_unavailable_warning_interval = 300
 def get_kafka_producer():
     """获取Kafka生产者实例（单例，带错误处理和重试限制）"""
     global _producer, _producer_init_failed, _last_init_attempt_time
+
+    if not _KAFKA_AVAILABLE:
+        return None
 
     try:
         bootstrap_servers = current_app.config.get('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')

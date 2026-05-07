@@ -1,0 +1,68 @@
+# 树莓派/ARM CPU-only 精简镜像
+# 基于 Debian Slim，
+# 仅支持 ONNX Runtime 推理（不安装 PyTorch / ultralytics / PaddlePaddle）
+FROM python:3.11-slim-bookworm AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# ============ 系统依赖 ============
+FROM base AS dependencies
+
+RUN set -ex && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libgomp1 \
+        libusb-1.0-0 \
+        gcc \
+        g++ \
+        libpq-dev \
+        tzdata && \
+    ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    rm -rf /var/lib/apt/lists/*
+
+# ============ Python 依赖 ============
+FROM dependencies AS python-deps
+
+COPY requirements.arm.txt /app/requirements.txt
+
+RUN set -ex && \
+    pip3 install --upgrade pip && \
+    pip3 install -r /app/requirements.txt
+
+# ============ 第四阶段：应用部署 ============
+FROM python-deps AS runtime
+
+# 只复制运行需要的内容（注意 .dockerignore 也要配合）
+COPY . /app/
+
+RUN set -ex && \
+    mkdir -p \
+        /app/data/uploads \
+        /app/data/datasets \
+        /app/data/models \
+        /app/data/inference_results \
+        /app/temp_uploads \
+        /app/static/models && \
+    chmod +x /app/run.py
+
+EXPOSE 6000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -fs http://localhost:6000/actuator/health > /dev/null || exit 1
+
+CMD ["python3", "run.py"]

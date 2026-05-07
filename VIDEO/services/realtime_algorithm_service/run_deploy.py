@@ -30,6 +30,162 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 import concurrent.futures
 
+
+# ===================== ONNX Runtime YOLO 推理封装 =====================
+class OnnxYoloModel:
+    """用 ONNX Runtime 替代 ultralytics YOLO 的轻量推理封装，
+    接口与 ultralytics YOLO 调用方式兼容（仅覆盖 run_deploy 用到的部分）。"""
+
+    # YOLOv8/YOLO11 COCO 80 类名称
+    COCO_NAMES = {
+        0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorbike', 4: 'aeroplane',
+        5: 'bus', 6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light',
+        10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter', 13: 'bench',
+        14: 'bird', 15: 'cat', 16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow',
+        20: 'elephant', 21: 'bear', 22: 'zebra', 23: 'giraffe', 24: 'backpack',
+        25: 'umbrella', 26: 'handbag', 27: 'tie', 28: 'suitcase', 29: 'frisbee',
+        30: 'skis', 31: 'snowboard', 32: 'sports ball', 33: 'kite',
+        34: 'baseball bat', 35: 'baseball glove', 36: 'skateboard',
+        37: 'surfboard', 38: 'tennis racket', 39: 'bottle', 40: 'wine glass',
+        41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl',
+        46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli',
+        51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake',
+        56: 'chair', 57: 'sofa', 58: 'pottedplant', 59: 'bed',
+        60: 'diningtable', 61: 'toilet', 62: 'tvmonitor', 63: 'laptop',
+        64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone',
+        68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink',
+        72: 'refrigerator', 73: 'book', 74: 'clock', 75: 'vase',
+        76: 'scissors', 77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush',
+    }
+
+    def __init__(self, onnx_path: str):
+        import onnxruntime as ort
+        self.session = ort.InferenceSession(
+            onnx_path, providers=['CPUExecutionProvider'])
+        self.input_name = self.session.get_inputs()[0].name
+        meta = self.session.get_inputs()[0]
+        self.input_h = meta.shape[2] if isinstance(meta.shape[2], int) else 640
+        self.input_w = meta.shape[3] if isinstance(meta.shape[3], int) else 640
+        self.names = dict(self.COCO_NAMES)
+
+    def _preprocess(self, img: np.ndarray) -> tuple:
+        h0, w0 = img.shape[:2]
+        resized = cv2.resize(img, (self.input_w, self.input_h))
+        blob = resized.astype(np.float32) / 255.0
+        blob = blob.transpose(2, 0, 1)[np.newaxis, ...]
+        return blob, h0, w0
+
+    @staticmethod
+    def _xywh2xyxy(x):
+        y = np.copy(x)
+        y[:, 0] = x[:, 0] - x[:, 2] / 2
+        y[:, 1] = x[:, 1] - x[:, 3] / 2
+        y[:, 2] = x[:, 0] + x[:, 2] / 2
+        y[:, 3] = x[:, 1] + x[:, 3] / 2
+        return y
+
+    @staticmethod
+    def _nms(boxes, scores, iou_threshold):
+        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        areas = (x2 - x1) * (y2 - y1)
+        order = scores.argsort()[::-1]
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+            inter = np.maximum(0, xx2 - xx1) * np.maximum(0, yy2 - yy1)
+            iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+            inds = np.where(iou <= iou_threshold)[0]
+            order = order[inds + 1]
+        return np.array(keep, dtype=int)
+
+    def _postprocess(self, output, h0, w0, conf_thres, iou_thres):
+        # output shape: (1, 84, 8400) → transpose to (8400, 84)
+        pred = output[0].squeeze(0).T
+        scores = pred[:, 4:]
+        max_scores = scores.max(axis=1)
+        mask = max_scores > conf_thres
+        pred = pred[mask]
+        max_scores = max_scores[mask]
+        class_ids = scores[mask].argmax(axis=1)
+
+        if len(pred) == 0:
+            return [], [], []
+
+        boxes_xywh = pred[:, :4]
+        boxes_xyxy = self._xywh2xyxy(boxes_xywh)
+        # scale to original image
+        boxes_xyxy[:, [0, 2]] *= w0 / self.input_w
+        boxes_xyxy[:, [1, 3]] *= h0 / self.input_h
+
+        keep = self._nms(boxes_xyxy, max_scores, iou_thres)
+        return boxes_xyxy[keep], max_scores[keep], class_ids[keep]
+
+    def __call__(self, frame, conf=0.25, iou=0.45, imgsz=640, verbose=False,
+                 half=False, device='cpu', **kwargs):
+        blob, h0, w0 = self._preprocess(frame)
+        output = self.session.run(None, {self.input_name: blob})
+        boxes, confs, cls_ids = self._postprocess(output, h0, w0, conf, iou)
+        return [OnnxDetectionResult(boxes, confs, cls_ids, self.names)]
+
+
+class OnnxDetectionResult:
+    """模拟 ultralytics Results 对象，仅实现 run_deploy 用到的属性。"""
+
+    def __init__(self, boxes_xyxy, confidences, class_ids, names):
+        self.names = names
+        if len(boxes_xyxy) > 0:
+            self.boxes = _OnnxBoxes(
+                _NumpyCpuTensor(np.array(boxes_xyxy, dtype=np.float32)),
+                _NumpyCpuTensor(np.array(confidences, dtype=np.float32)),
+                _NumpyCpuTensor(np.array(class_ids, dtype=np.float32)),
+            )
+        else:
+            self.boxes = _OnnxBoxes(None, None, None)
+
+
+class _NumpyCpuTensor:
+    """模拟 torch.Tensor 的 .cpu().numpy() 调用链。"""
+    def __init__(self, arr):
+        self._arr = arr
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._arr
+
+    def __len__(self):
+        return 0 if self._arr is None else len(self._arr)
+
+    def __getitem__(self, idx):
+        return self._arr[idx]
+
+    def __iter__(self):
+        return iter(self._arr)
+
+    def tolist(self):
+        return self._arr.tolist()
+
+    @property
+    def shape(self):
+        return self._arr.shape
+
+
+class _OnnxBoxes:
+    def __init__(self, xyxy, conf, cls):
+        self.xyxy = xyxy
+        self.conf = conf
+        self.cls = cls
+
+    def __len__(self):
+        return 0 if self.xyxy is None else len(self.xyxy)
+# ===================== ONNX Runtime YOLO 推理封装 END =====================
+
 # 添加VIDEO模块路径
 video_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, video_root)
@@ -251,35 +407,36 @@ def load_yolo_models(model_ids: List[int]) -> Dict[int, Any]:
         model_ids: 模型ID列表（正数表示数据库模型，负数表示默认模型）
 
     Returns:
-        Dict[int, YOLO]: 模型字典 {model_id: YOLO模型实例}
+        Dict[int, Any]: 模型字典 {model_id: YOLO模型实例或OnnxYoloModel实例}
     """
     try:
-        from ultralytics import YOLO
-
         models = {}
 
         for model_id in model_ids:
             try:
-                # 默认模型映射
+                # 默认模型映射（优先 .onnx，回退 .pt）
                 default_model_map = {
-                    -1: 'yolo11n.pt',
-                    -2: 'yolov8n.pt',
+                    -1: ('yolo11n.onnx', 'yolo11n.pt'),
+                    -2: ('yolov8n.onnx', 'yolov8n.pt'),
                 }
 
                 # 如果是负数ID，表示默认模型
                 if model_id < 0:
-                    model_filename = default_model_map.get(model_id)
-                    if not model_filename:
+                    entry = default_model_map.get(model_id)
+                    if not entry:
                         logger.warning(f"未知的默认模型ID: {model_id}，跳过")
                         continue
 
                     video_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                    model_path = os.path.join(video_root, model_filename)
-
-                    if not os.path.exists(model_path):
-                        logger.warning(f"默认模型文件不存在: {model_path}，尝试从ultralytics下载")
-                        # 尝试从ultralytics下载（如果本地不存在）
-                        model_path = model_filename  # ultralytics会自动下载
+                    model_path = None
+                    for candidate in entry:
+                        p = os.path.join(video_root, candidate)
+                        if os.path.exists(p) and os.path.getsize(p) > 0:
+                            model_path = p
+                            break
+                    if not model_path:
+                        logger.warning(f"默认模型文件不存在: {[os.path.join(video_root, c) for c in entry]}，跳过")
+                        continue
                 else:
                     # 边缘版：正数模型 ID 仅读取本机 VIDEO/data/models/<id>/，与 AI 模块无任何 HTTP 交互
                     model_path = _resolve_edge_local_model_weights(model_id)
@@ -290,7 +447,15 @@ def load_yolo_models(model_ids: List[int]) -> Dict[int, Any]:
 
                 # 加载YOLO模型
                 logger.info(f"正在加载YOLO模型: model_id={model_id}, path={model_path}")
-                yolo_model = YOLO(str(model_path))
+
+                if str(model_path).endswith('.onnx'):
+                    yolo_model = OnnxYoloModel(str(model_path))
+                    logger.info(f"✅ YOLO模型加载成功（ONNX Runtime）: model_id={model_id}")
+                else:
+                    from ultralytics import YOLO
+                    yolo_model = YOLO(str(model_path))
+                    logger.info(f"✅ YOLO模型加载成功（PyTorch）: model_id={model_id}")
+
                 models[model_id] = yolo_model
                 logger.info(f"✅ YOLO模型加载成功: model_id={model_id}")
 
@@ -2131,8 +2296,8 @@ def extractor_worker():
                 idle_count = 0  # 重置空闲计数器
             else:
                 # 没有找到工作，增加空闲计数并采用指数退避休眠
-                idle_count += 1
-                sleep_time = min(0.05 * (2 ** idle_count), 1.0)  # 指数退避，最大1秒
+                idle_count = min(idle_count + 1, 20)
+                sleep_time = min(0.05 * (2 ** idle_count), 1.0)
                 time.sleep(sleep_time)
 
         except Exception as e:
@@ -2385,8 +2550,8 @@ def yolo_detection_worker(worker_id: int):
                             pass
             else:
                 # 没有找到工作，增加空闲计数并采用指数退避休眠
-                idle_count += 1
-                sleep_time = min(0.05 * (2 ** idle_count), 1.0)  # 指数退避，最大1秒
+                idle_count = min(idle_count + 1, 20)
+                sleep_time = min(0.05 * (2 ** idle_count), 1.0)
                 time.sleep(sleep_time)
 
         except Exception as e:

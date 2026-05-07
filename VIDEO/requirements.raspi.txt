@@ -1,0 +1,46 @@
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# ===========================================
+# 树莓派 / ARM CPU-only 精简依赖
+# 仅支持 ONNX Runtime 推理（OnnxYoloModel）
+# 已移除：torch / torchvision / ultralytics / paddlepaddle / paddleocr / openvino
+# ===========================================
+
+# Web 框架
+setuptools<81
+Flask==2.3.2
+Flask-SQLAlchemy==3.0.5
+Flask-CORS>=3.0.0
+
+# ONNX 推理（CPU 版本，无 GPU 依赖）
+onnxruntime==1.20.0
+
+# 图像处理
+# 用 headless 版本省 ~50MB（不依赖 GUI 库）
+opencv-python-headless==4.8.0.74
+Pillow==10.0.0
+numpy==1.26.4
+
+# 工具类
+python-dotenv==1.0.0
+PyYAML==6.0.2
+requests==2.31.0
+psycopg2-binary==2.9.9
+python-magic==0.4.27
+pytz==2024.1
+py-healthcheck==1.10.0
+netifaces==0.11.0
+psutil==7.2.2
+
+# ONVIF 摄像头
+WSDiscovery==2.1.2
+onvif-zeep==0.2.12
+
+# 调度
+APScheduler==3.10.4
+croniter>=1.4.1
+
+# Kafka（可选，如果不用 Kafka 告警可去掉）
+kafka-python>=2.0.2
+
+# 语音相关（如果不用可去掉）
+pydub==0.25.1
