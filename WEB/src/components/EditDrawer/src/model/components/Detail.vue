@@ -29,7 +29,7 @@
 import {BasicModal, useModalInner} from '@/components/Modal';
 import {BasicTable, useTable} from '@/components/Table';
 import {detailColumns, detailSearchSchema} from '../tableData';
-import {getDevicethingmodelsHistory} from '../thingModelApiStub';
+import {getDevicethingmodelsHistory} from '@/api/device/devices';
 import {reactive, ref} from 'vue';
 import moment from 'moment';
 import {RadioButton, RadioGroup, RangePicker} from 'ant-design-vue';

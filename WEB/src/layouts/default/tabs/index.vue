@@ -104,13 +104,15 @@ function handleEdit(targetKey: string) {
       @change="handleChange"
       @edit="handleEdit"
     >
-      <template v-for="item in getTabsState" :key="item.query ? item.fullPath : item.path">
-        <Tabs.TabPane :closable="!(item && item.meta && item.meta.affix)">
-          <template #tab>
-            <TabContent :tab-item="item" />
-          </template>
-        </Tabs.TabPane>
-      </template>
+      <Tabs.TabPane
+        v-for="item in getTabsState"
+        :key="item.fullPath || item.path"
+        :closable="!(item && item.meta && item.meta.affix)"
+      >
+        <template #tab>
+          <TabContent :tab-item="item" />
+        </template>
+      </Tabs.TabPane>
 
       <template v-if="getShowRedo || getShowQuick" #rightExtra>
         <TabRedo v-if="getShowRedo" />

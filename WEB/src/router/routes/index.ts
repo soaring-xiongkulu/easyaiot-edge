@@ -1,6 +1,6 @@
 import type { AppRouteModule, AppRouteRecordRaw } from '@/router/types'
 
-import { PAGE_NOT_FOUND_ROUTE, REDIRECT_ROUTE } from '@/router/routes/basic'
+import { GB28181_ROUTE_MODULE, FACE_MANAGE_ROUTE, PLATE_MANAGE_ROUTE, SCENARIO_POSE_MANAGE_ROUTE, RECORD_SPACE_MANAGE_ROUTE, SNAP_SPACE_MANAGE_ROUTE, SAM_MODEL_SETUP_ROUTE, ALGORITHM_POST_PROCESS_IDE_ROUTE, RULE_CHAINS_NODERED_ROUTE, PAGE_NOT_FOUND_ROUTE, REDIRECT_ROUTE } from '@/router/routes/basic'
 
 import { PageEnum } from '@/enums/pageEnum'
 import { t } from '@/hooks/web/useI18n'
@@ -83,6 +83,56 @@ export const ProfileRoute: AppRouteRecordRaw = {
   ],
 }
 
+export const CodegenRoute: AppRouteRecordRaw = {
+  path: '/codegen',
+  component: LAYOUT,
+  name: 'CodegenEdit',
+  meta: {
+    title: '修改生成配置',
+    hidden: true,
+  },
+  children: [
+    {
+      path: 'editTable',
+      component: () => import('@/views/infra/codegen/EditTable.vue'),
+      name: 'EditTable',
+      meta: {
+        canTo: true,
+        hidden: true,
+        noTagsView: false,
+        icon: 'ant-design:edit-outlined',
+        title: '修改生成配置',
+        activeMenu: 'infra/codegen/index',
+      },
+    },
+  ],
+}
+
+export const JobLogRoute: AppRouteRecordRaw = {
+  path: '/job',
+  component: LAYOUT,
+  name: 'JobL',
+  meta: {
+    title: '调度日志',
+    hidden: true,
+  },
+  children: [
+    {
+      path: 'job-log',
+      component: () => import('@/views/infra/job/logger/index.vue'),
+      name: 'InfraJobLog',
+      meta: {
+        canTo: true,
+        hidden: true,
+        noTagsView: false,
+        icon: 'ant-design:bar-chart-outlined',
+        title: '调度日志',
+        activeMenu: 'infra/job/index',
+      },
+    },
+  ],
+}
+
 // Basic routing without permission
 // 未经许可的基本路由
 export const basicRoutes = [
@@ -90,6 +140,17 @@ export const basicRoutes = [
   SSORoute,
   RootRoute,
   ProfileRoute,
+  CodegenRoute,
+  JobLogRoute,
+  GB28181_ROUTE_MODULE,
+  FACE_MANAGE_ROUTE,
+  PLATE_MANAGE_ROUTE,
+  SCENARIO_POSE_MANAGE_ROUTE,
+  RECORD_SPACE_MANAGE_ROUTE,
+  SNAP_SPACE_MANAGE_ROUTE,
+  ALGORITHM_POST_PROCESS_IDE_ROUTE,
+  RULE_CHAINS_NODERED_ROUTE,
+  SAM_MODEL_SETUP_ROUTE,
   REDIRECT_ROUTE,
   PAGE_NOT_FOUND_ROUTE,
 ]

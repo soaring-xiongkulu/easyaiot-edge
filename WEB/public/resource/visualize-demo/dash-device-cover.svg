@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="52%" stop-color="#1e3a8a"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="480" fill="url(#bg)"/>
+  <rect width="800" height="480" fill="url(#shine)"/>
+  <circle cx="720" cy="50" r="120" fill="#ffffff" fill-opacity="0.05"/>
+  <circle cx="40" cy="440" r="150" fill="#ffffff" fill-opacity="0.04"/>
+  
+  <rect x="90" y="130" width="230" height="160" rx="16" fill="#93c5fd" fill-opacity="0.12" stroke="#93c5fd" stroke-opacity="0.45"/>
+  <circle cx="170" cy="210" r="40" fill="none" stroke="#93c5fd" stroke-opacity="0.55" stroke-width="9"/>
+  <rect x="250" y="170" width="42" height="80" rx="8" fill="#93c5fd" fill-opacity="0.3"/>
+  <path d="M360 160 H620" stroke="#93c5fd" stroke-opacity="0.35" stroke-width="3" stroke-dasharray="10 8"/>
+  <circle cx="660" cy="160" r="14" fill="#93c5fd" fill-opacity="0.5"/>
+  <circle cx="660" cy="230" r="14" fill="#93c5fd" fill-opacity="0.35"/>
+  <circle cx="660" cy="300" r="14" fill="#93c5fd" fill-opacity="0.22"/>
+
+</svg>

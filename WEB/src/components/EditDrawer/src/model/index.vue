@@ -45,7 +45,7 @@
 <script lang="ts" setup>
 import {BasicTable, TableAction, useTable} from '@/components/Table';
 import {getBasicColumns, getFormConfig} from './tableData';
-import {getDevicethingModels} from './thingModelApiStub';
+import {getDevicethingModels} from '@/api/device/devices';
 import Detail from './components/Detail.vue';
 import {useModal} from '@/components/Modal';
 import {useMessage} from '@/hooks/web/useMessage';

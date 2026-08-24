@@ -4,7 +4,7 @@ import { nextTick, toRaw, unref } from 'vue'
 import { cloneDeep, get, set, uniqBy } from 'lodash-es'
 import type { FormActionType, FormProps, FormSchemaInner as FormSchema } from '../types/form'
 import { dateItemType, defaultValueComponents, handleInputNumberValue } from '../helper'
-import { isArray, isDef, isEmpty, isFunction, isNil, isObject, isString } from '@/utils/is'
+import { isArray, isBoolean, isDef, isEmpty, isFunction, isNil, isNumber, isObject, isString } from '@/utils/is'
 import { deepMerge } from '@/utils'
 import { dateUtil } from '@/utils/dateUtil'
 import { error } from '@/utils/log'
@@ -305,14 +305,20 @@ export function useFormEvents({
     const obj: Recordable = {}
     const currentFieldsValue = getFieldsValue()
     schemas.forEach((item) => {
+      const fieldValue = currentFieldsValue[item.field]
+      // 数字和布尔值本身就是有效值，但 lodash 的 isEmpty 会把它们误判为空，
+      // 进而在 updateSchema/resetSchema 时把已有值（如开关状态、间隔秒数）重置为默认值。
+      // 这里显式排除 number/boolean，仅在真正为空（未定义、null、空串、空数组/对象）时才填充默认值。
+      const isEmptyValue
+        = !(item.field in currentFieldsValue)
+        || isNil(fieldValue)
+        || (!isNumber(fieldValue) && !isBoolean(fieldValue) && isEmpty(fieldValue))
       if (
         item.component !== 'Divider'
         && Reflect.has(item, 'field')
         && item.field
         && !isNil(item.defaultValue)
-        && (!(item.field in currentFieldsValue)
-          || isNil(currentFieldsValue[item.field])
-          || isEmpty(currentFieldsValue[item.field]))
+        && isEmptyValue
       )
         obj[item.field] = item.defaultValue
     })

@@ -59,20 +59,20 @@ export function useDrawer(): UseDrawerReturnType {
     }),
 
     openDrawer: <T = any>(open = true, data?: T, openOnSet = true): void => {
+      if (data) {
+        if (openOnSet) {
+          dataTransferRef[unref(uid)] = null
+          dataTransferRef[unref(uid)] = toRaw(data)
+        }
+        else {
+          const equal = isEqual(toRaw(dataTransferRef[unref(uid)]), toRaw(data))
+          if (!equal)
+            dataTransferRef[unref(uid)] = toRaw(data)
+        }
+      }
       getInstance()?.setDrawerProps({
         open,
       })
-      if (!data)
-        return
-
-      if (openOnSet) {
-        dataTransferRef[unref(uid)] = null
-        dataTransferRef[unref(uid)] = toRaw(data)
-        return
-      }
-      const equal = isEqual(toRaw(dataTransferRef[unref(uid)]), toRaw(data))
-      if (!equal)
-        dataTransferRef[unref(uid)] = toRaw(data)
     },
     closeDrawer: () => {
       getInstance()?.setDrawerProps({ open: false })

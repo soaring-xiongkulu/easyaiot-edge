@@ -5,11 +5,14 @@
         {{ currentDate }} {{ currentDay }}
       </div>
     </div>
-
+    
     <div class="header-center">
-      <h1 class="platform-title">边缘智能算法应用平台</h1>
+      <div class="title-row">
+        <h1 class="platform-title">{{ dashboardTitle }}</h1>
+        <PlatformBrandingFab />
+      </div>
     </div>
-
+    
     <div class="header-right">
       <div class="user-info">
         <span class="user-role" @click="handleGoToAdmin">管理后台</span>
@@ -19,21 +22,27 @@
 </template>
 
 <script lang="ts" setup>
-import {onMounted, onUnmounted, ref} from 'vue'
-import {useRouter} from 'vue-router'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { getAdminHomeRoute } from '@/utils/deployProfile'
+import { usePlatformBranding } from '@/hooks/web/usePlatformBranding'
+import PlatformBrandingFab from './PlatformBrandingFab.vue'
 
 defineOptions({
   name: 'MonitorHeader'
 })
 
-const props = defineProps<{
+defineProps<{
   activeVideos?: any[]
 }>()
 
 const router = useRouter()
+const { config } = usePlatformBranding()
+const dashboardTitle = computed(() => config.value.dashboardTitle)
 
 const handleGoToAdmin = () => {
-  router.push('/camera/index')
+  const target = getAdminHomeRoute()
+  void router.push(target.query ? { path: target.path, query: target.query } : target.path)
 }
 
 const currentDate = ref('')
@@ -45,7 +54,7 @@ const updateDateTime = () => {
   const month = String(now.getMonth() + 1).padStart(2, '0')
   const day = String(now.getDate()).padStart(2, '0')
   currentDate.value = `${year}年${month}月${day}日`
-
+  
   const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
   currentDay.value = weekDays[now.getDay()]
 }
@@ -75,7 +84,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 0 30px;
-
+  
   &::before {
     content: '';
     position: absolute;
@@ -83,8 +92,9 @@ onUnmounted(() => {
     left: 0;
     right: 0;
     bottom: 0;
-    background: linear-gradient(90deg, transparent 0%, rgba(52, 134, 218, 0.05) 50%, transparent 100%),
-    radial-gradient(circle at top left, rgba(52, 134, 218, 0.1), transparent 50%);
+    background: 
+      linear-gradient(90deg, transparent 0%, rgba(52, 134, 218, 0.05) 50%, transparent 100%),
+      radial-gradient(circle at top left, rgba(52, 134, 218, 0.1), transparent 50%);
     pointer-events: none;
   }
 }
@@ -110,6 +120,16 @@ onUnmounted(() => {
   flex-direction: column;
   justify-content: center;
   align-items: center;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  max-width: 100%;
+  position: relative;
+  z-index: 1;
 }
 
 .platform-title {
@@ -153,7 +173,7 @@ onUnmounted(() => {
   transition: all 0.3s;
   position: relative;
   z-index: 1;
-
+  
   &:hover {
     background: rgba(52, 134, 218, 0.25);
     border-color: rgba(52, 134, 218, 0.6);

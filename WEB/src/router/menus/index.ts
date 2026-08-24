@@ -9,6 +9,7 @@ import { filter } from '@/utils/helper/treeHelper'
 import { isHttpUrl } from '@/utils/is'
 import { router } from '@/router'
 import { PermissionModeEnum } from '@/enums/appEnum'
+import { isMenuHiddenByDeployProfile } from '@/utils/deployProfile'
 
 const modules = import.meta.glob('./modules/**/*.ts', { eager: true })
 
@@ -55,7 +56,9 @@ function getAsyncMenus() {
   // 递归过滤所有隐藏的菜单
   const menuFilter = (items) => {
     return items.filter((item) => {
-      const show = !item.meta?.hideMenu && !item.hideMenu
+      const show = !item.meta?.hideMenu
+        && !item.hideMenu
+        && !isMenuHiddenByDeployProfile(item.name)
       if (show && item.children)
         item.children = menuFilter(item.children)
 

@@ -6,7 +6,7 @@ import { LoginStateEnum, useFormRules, useFormValid, useLoginState } from './use
 import { StrengthMeter } from '@/components/StrengthMeter'
 import { CountdownInput } from '@/components/CountDown'
 import { useI18n } from '@/hooks/web/useI18n'
-
+import { Button } from '@/components/Button'
 const FormItem = Form.Item
 const InputPassword = Input.Password
 const { t } = useI18n()
@@ -69,12 +69,12 @@ async function handleRegister() {
         </Checkbox>
       </FormItem>
 
-      <a-button type="primary" class="enter-x" size="large" block :loading="loading" @click="handleRegister">
+      <Button type="primary" class="enter-x" size="large" block :loading="loading" @click="handleRegister">
         {{ t('sys.login.registerButton') }}
-      </a-button>
-      <a-button size="large" block class="enter-x mt-4" @click="handleBackLogin">
+      </Button>
+      <Button size="large" block class="enter-x mt-4" @click="handleBackLogin">
         {{ t('sys.login.backSignIn') }}
-      </a-button>
+      </Button>
     </Form>
   </div>
 </template>

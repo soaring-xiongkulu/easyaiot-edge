@@ -5,7 +5,7 @@ import LoginFormTitle from './LoginFormTitle.vue'
 import { LoginStateEnum, useFormRules, useLoginState } from './useLogin'
 import { CountdownInput } from '@/components/CountDown'
 import { useI18n } from '@/hooks/web/useI18n'
-
+import { Button } from '@/components/Button'
 const FormItem = Form.Item
 const { t } = useI18n()
 const { handleBackLogin, getLoginState } = useLoginState()
@@ -46,12 +46,12 @@ async function handleReset() {
       </FormItem>
 
       <FormItem class="enter-x">
-        <a-button type="primary" size="large" block :loading="loading" @click="handleReset">
+        <Button type="primary" size="large" block :loading="loading" @click="handleReset">
           {{ t('common.resetText') }}
-        </a-button>
-        <a-button size="large" block class="mt-4" @click="handleBackLogin">
+        </Button>
+        <Button size="large" block class="mt-4" @click="handleBackLogin">
           {{ t('sys.login.backSignIn') }}
-        </a-button>
+        </Button>
       </FormItem>
     </Form>
   </template>

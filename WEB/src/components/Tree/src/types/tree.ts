@@ -12,7 +12,7 @@ export enum ToolbarEnum {
   CHECK_UN_STRICTLY,
 }
 
-export const treeEmits = ['update:expandedKeys', 'update:selectedKeys', 'update:value', 'change', 'check', 'update:searchValue']
+export const treeEmits = ['update:expandedKeys', 'update:selectedKeys', 'update:value', 'change', 'check', 'update:searchValue', 'select']
 
 export interface TreeState {
   expandedKeys: KeyType[]

@@ -9,7 +9,7 @@ import { useMessage } from '@/hooks/web/useMessage'
 
 import { useDesign } from '@/hooks/web/useDesign'
 import { authorize, getAuthorize } from '@/api/base/login'
-
+import { Button } from '@/components/Button'
 const FormItem = Form.Item
 
 const { t } = useI18n()
@@ -179,9 +179,9 @@ onMounted(() => {
           <FormItem>
             <!-- No logic, you need to deal with it yourself -->
             <Checkbox :checked="scope" size="small">
-              <a-button type="link" size="small">
+              <Button type="link" size="small">
                 {{ formatScope(scope) }}
-              </a-button>
+              </Button>
             </Checkbox>
           </FormItem>
         </template>
@@ -189,12 +189,12 @@ onMounted(() => {
     </Row>
 
     <FormItem class="enter-x">
-      <a-button type="primary" size="large" block :loading="loading" @click="handleAuthorize(true)">
+      <Button type="primary" size="large" block :loading="loading" @click="handleAuthorize(true)">
         {{ t('sys.login.loginButton') }}
-      </a-button>
-      <a-button size="large" class="enter-x mt-4" block @click="handleBackLogin">
+      </Button>
+      <Button size="large" class="enter-x mt-4" block @click="handleBackLogin">
         {{ t('common.cancelText') }}
-      </a-button>
+      </Button>
     </FormItem>
   </Form>
 </template>

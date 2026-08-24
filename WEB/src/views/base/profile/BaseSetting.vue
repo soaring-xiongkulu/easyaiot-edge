@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { Button, Col, Row } from 'ant-design-vue'
+import { Col, Row } from 'ant-design-vue'
 import { computed, onMounted } from 'vue'
 import { baseSetschemas } from './data'
 import { BasicForm, useForm } from '@/components/Form/index'
@@ -9,7 +9,7 @@ import { useMessage } from '@/hooks/web/useMessage'
 import headerImg from '@/assets/images/header.jpg'
 import { useUserStore } from '@/store/modules/user'
 import { getUserProfileApi, updateUserProfileApi, uploadAvatarApi } from '@/api/base/profile'
-
+import { Button } from '@/components/Button'
 const { createMessage } = useMessage()
 const userStore = useUserStore()
 

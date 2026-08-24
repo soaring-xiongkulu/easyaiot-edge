@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1c1006"/>
+      <stop offset="52%" stop-color="#7c2d12"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="480" fill="url(#bg)"/>
+  <rect width="800" height="480" fill="url(#shine)"/>
+  <circle cx="720" cy="50" r="120" fill="#ffffff" fill-opacity="0.05"/>
+  <circle cx="40" cy="440" r="150" fill="#ffffff" fill-opacity="0.04"/>
+  
+  <circle cx="180" cy="210" r="62" fill="none" stroke="#fdba74" stroke-opacity="0.35" stroke-width="8"/>
+  <circle cx="350" cy="170" r="46" fill="none" stroke="#fdba74" stroke-opacity="0.4" stroke-width="8"/>
+  <circle cx="520" cy="230" r="54" fill="none" stroke="#fdba74" stroke-opacity="0.3" stroke-width="8"/>
+  <path d="M242 210 H304 M396 170 H466 M574 230 H660" stroke="#fdba74" stroke-opacity="0.4" stroke-width="4"/>
+  <rect x="640" y="180" width="80" height="90" rx="8" fill="#fdba74" fill-opacity="0.15" stroke="#fdba74" stroke-opacity="0.4"/>
+
+</svg>

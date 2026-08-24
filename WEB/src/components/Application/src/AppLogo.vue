@@ -1,9 +1,11 @@
 <script lang="ts" setup>
 import {computed, unref} from 'vue'
+import {useRoute} from 'vue-router'
 import {useGlobSetting} from '@/hooks/setting'
 import {useGo} from '@/hooks/web/usePage'
 import {useMenuSetting} from '@/hooks/setting/useMenuSetting'
 import {useDesign} from '@/hooks/web/useDesign'
+import {usePlatformBranding} from '@/hooks/web/usePlatformBranding'
 import {PageEnum} from '@/enums/pageEnum'
 
 const props = defineProps({
@@ -18,7 +20,25 @@ const props = defineProps({
 const {prefixCls} = useDesign('app-logo')
 const {getCollapsedShowTitle} = useMenuSetting()
 const {title} = useGlobSetting()
+const {config} = usePlatformBranding()
+const route = useRoute()
 const go = useGo()
+
+const isLoginPage = computed(() => route.path.includes('/login'))
+
+const displayTitle = computed(() => {
+  if (unref(isLoginPage)) {
+    return config.value.loginName
+  }
+  return config.value.platformName || title
+})
+
+const displayLogo = computed(() => {
+  if (unref(isLoginPage)) {
+    return config.value.loginLogo
+  }
+  return config.value.platformLogo
+})
 
 const getAppLogoClass = computed(() => [prefixCls, props.theme, {'collapsed-show-title': unref(getCollapsedShowTitle)}])
 
@@ -37,10 +57,10 @@ function goHome() {
 <template>
   <div class="ant-icon" :class="getAppLogoClass" @click="goHome">
     <div class="logo-icon">
-      <img class="uc-logo" src="@/assets/images/logo.png"/>
+      <img class="uc-logo" :src="displayLogo" alt="logo"/>
     </div>
     <div v-show="showTitle" class="truncate md:opacity-100 logo-title" :class="getTitleClass">
-      {{ title }}
+      {{ displayTitle }}
     </div>
   </div>
 </template>

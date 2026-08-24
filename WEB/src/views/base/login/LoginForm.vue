@@ -18,7 +18,9 @@ import * as authUtil from '@/utils/auth'
 
 import { Verify } from '@/components/Verifition'
 import { getTenantByWebsite, getTenantIdByName } from '@/api/base/login'
-
+import { Button } from '@/components/Button'
+import { onMounted } from 'vue'
+import { isLoginCaptchaEnabled, isLoginTenantEnabled } from '@/utils/deployProfile'
 const FormItem = Form.Item
 const InputPassword = Input.Password
 
@@ -29,13 +31,19 @@ const userStore = useUserStore()
 const permissionStore = usePermissionStore()
 
 const { tenantEnable, captchaEnable } = useGlobSetting()
+const loginTenantEnabled = isLoginTenantEnabled()
+const loginCaptchaEnabled = isLoginCaptchaEnabled()
 
 const { setLoginState, getLoginState } = useLoginState()
 const { getFormRules } = useFormRules()
 
 const formRef = ref()
 const loading = ref(false)
-const rememberMe = ref(false)
+const rememberMe = ref(authUtil.getRememberMe())
+
+onMounted(() => {
+  rememberMe.value = authUtil.getRememberMe()
+})
 
 const verify = ref()
 const captchaType = ref('blockPuzzle') // blockPuzzle 滑块 clickWord 点击文字
@@ -56,7 +64,7 @@ const getShow = computed(() => unref(getLoginState) === LoginStateEnum.LOGIN)
 // 获取验证码
 async function getCode() {
   // 情况一，未开启：则直接登录
-  if (captchaEnable === 'false') {
+  if (!loginCaptchaEnabled || captchaEnable === 'false') {
     await handleLogin({})
   }
   else {
@@ -68,7 +76,7 @@ async function getCode() {
 
 // 根据域名，获得租户信息 && 获取租户ID
 async function getTenantId() {
-  if (tenantEnable === 'true') {
+  if (loginTenantEnabled && tenantEnable === 'true') {
     const website = location.host
     const tenant = await getTenantByWebsite(website)
     if (tenant.id != null) {
@@ -79,6 +87,9 @@ async function getTenantId() {
       const res = await getTenantIdByName(formData.tenantName)
       authUtil.setTenantId(res.id)
     }
+  }
+  else {
+    authUtil.setTenantId(1)
   }
 }
 
@@ -93,11 +104,15 @@ async function handleLogin(params) {
       password: data.password,
       username: data.username,
       captchaVerification: params.captchaVerification,
+      rememberMe: rememberMe.value,
       mode: 'none', // 不要默认的错误提示
     })
     if (userInfo) {
       console.log(JSON.stringify(userInfo));
-      await permissionStore.changePermissionCode(userInfo.permissions)
+    if (userInfo) {
+      const perms = userInfo.permissions
+      await permissionStore.changePermissionCode(Array.isArray(perms) ? perms : [])
+    }
       notification.success({
         message: t('sys.login.loginSuccessTitle'),
         description: `${t('sys.login.loginSuccessDesc')}: ${userInfo.user.nickname}`,
@@ -123,11 +138,10 @@ async function handleLogin(params) {
   <LoginFormTitle v-show="getShow" class="enter-x" />
   <Form
     v-show="getShow" ref="formRef" class="enter-x p-4" :model="formData" :rules="getFormRules"
-    @keypress.enter="handleLogin"
+    @keypress.enter="getCode"
   >
-    <FormItem name="tenantName" class="enter-x">
+    <FormItem v-if="loginTenantEnabled && tenantEnable === 'true'" name="tenantName" class="enter-x">
       <Input
-        v-if="tenantEnable === 'true'"
         v-model:value="formData.tenantName"
         size="large"
         :placeholder="t('sys.login.tenantName')"
@@ -155,28 +169,35 @@ async function handleLogin(params) {
         <FormItem>
           <!-- No logic, you need to deal with it yourself -->
           <Checkbox v-model:checked="rememberMe" size="small">
-            {{ t('sys.login.rememberMe') }}
+            {{ t('sys.login.rememberMe30Days') }}
           </Checkbox>
         </FormItem>
       </Col>
       <Col :span="12">
         <FormItem :style="{ 'text-align': 'right' }">
           <!-- No logic, you need to deal with it yourself -->
-          <a-button type="link" size="small" @click="setLoginState(LoginStateEnum.RESET_PASSWORD)">
+          <Button type="link" size="small" @click="setLoginState(LoginStateEnum.RESET_PASSWORD)">
             {{ t('sys.login.forgetPassword') }}
-          </a-button>
+          </Button>
         </FormItem>
       </Col>
     </Row>
 
     <FormItem class="enter-x">
-      <a-button type="primary" size="large" block :loading="loading" @click="getCode">
+      <Button type="primary" size="large" block :loading="loading" @click="getCode">
         {{ t('sys.login.loginButton') }}
-      </a-button>
-      <!-- <a-button size="large" class="mt-4 enter-x" block @click="handleRegister">
+      </Button>
+      <!-- <Button size="large" class="mt-4 enter-x" block @click="handleRegister">
         {{ t('sys.login.registerButton') }}
-      </a-button> -->
+      </Button> -->
     </FormItem>
   </Form>
-  <Verify ref="verify" mode="pop" :captcha-type="captchaType" :img-size="{ width: '360px', height: '180px' }" @success="handleLogin" />
+  <Verify
+    v-if="loginCaptchaEnabled && captchaEnable !== 'false'"
+    ref="verify"
+    mode="pop"
+    :captcha-type="captchaType"
+    :img-size="{ width: '360px', height: '180px' }"
+    @success="handleLogin"
+  />
 </template>

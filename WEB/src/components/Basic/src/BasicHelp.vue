@@ -53,12 +53,12 @@ export default defineComponent({
       const textList = props.text
 
       if (isString(textList))
-        return <p>{textList}</p>
+        return <p style="white-space: pre-wrap; margin-bottom: 0;">{textList}</p>
 
       if (isArray(textList)) {
         return textList.map((text, index) => {
           return (
-            <p key={text}>
+            <p key={text} style="margin-bottom: 4px;">
               <>
                 {props.showIndex ? `${index + 1}. ` : ''}
                 {text}
@@ -90,6 +90,8 @@ export default defineComponent({
 
 <style>
 .overlay-class {
+  user-select: text;
+
   p {
     margin-bottom: 0;
   }

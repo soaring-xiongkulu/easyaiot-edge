@@ -2,8 +2,10 @@
 import {computed, unref} from 'vue'
 import {LoginStateEnum, useLoginState} from './useLogin'
 import {useI18n} from '@/hooks/web/useI18n'
+import {usePlatformBranding} from '@/hooks/web/usePlatformBranding'
 
 const {t} = useI18n()
+const {config} = usePlatformBranding()
 
 const {getLoginState} = useLoginState()
 
@@ -15,7 +17,11 @@ const getFormTitle = computed(() => {
     [LoginStateEnum.MOBILE]: t('sys.login.mobileSignInFormTitle'),
     [LoginStateEnum.QR_CODE]: t('sys.login.qrSignInFormTitle'),
   }
-  return titleObj[unref(getLoginState)]
+  const defaultTitle = titleObj[unref(getLoginState)]
+  if (unref(getLoginState) === LoginStateEnum.LOGIN && config.value.loginFormTitle.trim()) {
+    return config.value.loginFormTitle
+  }
+  return defaultTitle
 })
 </script>
 

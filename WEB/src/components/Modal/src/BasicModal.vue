@@ -31,9 +31,8 @@ const modalMethods: ModalMethods = {
   emitOpen: undefined,
   redoModalHeight: () => {
     nextTick(() => {
-      if (unref(modalWrapperRef)) {
-        ;(unref(modalWrapperRef) as any).setModalHeight()
-      }
+      const wrapper = unref(modalWrapperRef) as any
+      wrapper?.setModalHeight?.()
     })
   },
 }
@@ -91,8 +90,11 @@ const getWrapperHeight = computed(() => {
 })
 
 watchEffect(() => {
-  openRef.value = !!props.open
-  fullScreenRef.value = !!props.defaultFullscreen
+  const merged = unref(getMergeProps) as Record<string, any>
+  if (merged.open !== undefined)
+    openRef.value = !!merged.open
+  if (merged.defaultFullscreen !== undefined)
+    fullScreenRef.value = !!merged.defaultFullscreen
 })
 
 watch(

@@ -10,7 +10,6 @@
         :selected-device="selectedDevice"
         @device-change="handleDeviceChange"
         @device-play="handleDevicePlay"
-        @stream-type-change="handleStreamTypeChange"
       />
       
       <!-- 中央视频监控区域 -->
@@ -27,8 +26,11 @@
       <AlarmPanel 
         :alarm-list="alarmList"
         :today-alarm-count="todayAlarmCount"
+        @play-alarm="handlePlayAlarm"
       />
     </div>
+
+    <ImageModal @register="registerImageModal" />
   </div>
 </template>
 
@@ -38,20 +40,26 @@ import MonitorHeader from './components/Header.vue'
 import MonitorSidebar from './components/Sidebar.vue'
 import VideoMonitor from './components/VideoMonitor.vue'
 import AlarmPanel from './components/AlarmPanel.vue'
+import ImageModal from '@/views/alert/components/ImageModal/index.vue'
+import { useModal } from '@/components/Modal'
 import { useMessage } from '@/hooks/web/useMessage'
 import { queryAlarmList, getDashboardStatistics } from '@/api/device/calculate'
+import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage'
+import { formatAlertListTitle } from '@/views/alert/alertDisplay'
+
+const { createMessage } = useMessage()
+const [registerImageModal, { openModal: openImageModal }] = useModal()
 
 defineOptions({
   name: 'MonitorDashboard'
 })
 
-const { createMessage } = useMessage()
 const videoMonitorRef = ref<InstanceType<typeof VideoMonitor> | null>(null)
 
 // 选中的设备
 const selectedDevice = ref<any>({
   id: '1',
-  name: '华南小区西四路23号',
+  name: '',
   location: ''
 })
 
@@ -81,13 +89,12 @@ const loadAlarmList = async () => {
     const response = await queryAlarmList({
       pageNo: 1,
       pageSize: 7, // 只加载最近7条
-    })
+    }, { polling: true })
     
     if (response && response.alert_list) {
       // 处理告警数据，确保格式正确
       alarmList.value = response.alert_list.map((item: any) => {
-        // 优先使用 image_url（后台返回的 minio URL），如果没有则使用 image_path
-        let imageUrl = item.image_url || item.image_path || null
+        let imageUrl = resolveAlertImageDisplayUrl(item.image_url) || null
         
         // 处理告警级别
         let level = item.level || '告警'
@@ -117,15 +124,19 @@ const loadAlarmList = async () => {
         return {
           id: item.id || item.alert_id,
           type: type,
-          title: item.event || item.title || '未知事件',
+          title: formatAlertListTitle(item),
+          event: item.event,
           level: level,
           location: item.device_name || item.location || '未知设备',
           time: item.time || item.alert_time || item.created_at || '',
           image: imageUrl,
+          image_url: item.image_url,
           device_name: item.device_name,
           device_id: item.device_id,
           task_type: item.task_type,
-          information: item.information
+          information: item.information,
+          matched_person_name: item.matched_person_name,
+          source_event: item.source_event,
         }
       })
     } else {
@@ -133,7 +144,6 @@ const loadAlarmList = async () => {
     }
   } catch (error) {
     console.error('加载告警列表失败', error)
-    createMessage.error('加载告警列表失败')
     alarmList.value = []
   }
 }
@@ -157,6 +167,9 @@ const loadTodayAlarmCount = async () => {
 let refreshTimer: any = null
 let delayTimer: any = null
 let isMounted = false
+
+/** 大屏层 z-index 为 9999，需抬高挂载在 body 上的弹层，否则确认框/提示会被挡住 */
+const MONITOR_OVERLAY_Z_INDEX = 10050
 
 // 动态添加样式，隐藏顶部导航栏、标签页和左侧菜单，让大屏覆盖整个屏幕
 onMounted(() => {
@@ -186,6 +199,13 @@ onMounted(() => {
       height: 100vh !important;
       overflow: hidden !important;
       margin-left: 0 !important;
+    }
+    .ant-modal-root,
+    .ant-modal-wrap,
+    .ant-modal-mask,
+    .ant-message,
+    .ant-notification {
+      z-index: ${MONITOR_OVERLAY_Z_INDEX} !important;
     }
   `
   document.head.appendChild(style)
@@ -267,17 +287,25 @@ const handleDevicePlay = (device: any) => {
   }
 }
 
+// 告警事件点击查看告警图片
+const handlePlayAlarm = (alarm: any) => {
+  const minioUrl = alarm.image_url
+  if (minioUrl == null || String(minioUrl).trim() === '') {
+    createMessage.warn('告警图片不存在')
+    return
+  }
+  openImageModal(true, {
+    image_url: minioUrl,
+    information: alarm.information,
+    event: alarm.event,
+  })
+}
+
 // 处理视频列表变化
 const handleVideoListChange = (videos: any[]) => {
   activeVideos.value = videos
 }
 
-// 处理流类型切换
-const handleStreamTypeChange = (type: 'video' | 'ai') => {
-  if (videoMonitorRef.value) {
-    videoMonitorRef.value.switchStreamType(type)
-  }
-}
 </script>
 
 <style lang="less">

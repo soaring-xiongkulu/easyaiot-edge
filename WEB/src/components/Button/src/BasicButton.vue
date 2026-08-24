@@ -1,33 +1,47 @@
 <script lang="ts" setup>
 import { Button, theme } from 'ant-design-vue'
 import type { ComponentOptionsMixin } from 'vue'
-import { computed, unref } from 'vue'
+import { computed, unref, useSlots } from 'vue'
 import { buttonProps } from './props'
 import { useAttrs } from '@/hooks/core/useAttrs'
 import { Icon } from '@/components/Icon'
 
-defineOptions({ name: 'AButton', extends: Button as ComponentOptionsMixin, indeterminate: false })
+defineOptions({
+  name: 'AButton',
+  extends: Button as ComponentOptionsMixin,
+  inheritAttrs: false,
+  indeterminate: false,
+})
 const props = defineProps(buttonProps)
+const slots = useSlots()
 const { useToken } = theme
 const { token } = useToken()
-// get component class
 const attrs = useAttrs({ excludeDefaultKeys: false })
-const getButtonClass = computed(() => {
-  const { disabled } = props
-  return [
-    {
-      'is-disabled': disabled,
-    },
-  ]
-})
 
-// get inherit binding value
-const getBindValue = computed(() => ({ ...unref(attrs), ...props }))
+const getButtonClass = computed(() => ({
+  'is-disabled': props.disabled,
+}))
+
+const hasIconSlot = computed(() => Boolean(props.preIcon || slots.icon))
+
+const getBindValue = computed(() => {
+  const bind = { ...unref(attrs), ...props } as Record<string, unknown>
+  const {
+    preIcon: _preIcon,
+    postIcon: _postIcon,
+    iconSize: _iconSize,
+    color: _color,
+    onClick: _onClick,
+    ...rest
+  } = bind
+  return rest
+})
 </script>
 
 <template>
   <Button
-    v-bind="getBindValue" :style="{
+    v-bind="getBindValue"
+    :style="{
       backgroundColor: color
         ? (
           color === 'primary'
@@ -43,13 +57,16 @@ const getBindValue = computed(() => ({ ...unref(attrs), ...props }))
             )
         )
         : '',
-    }" :class="getButtonClass" @click="onClick"
+    }"
+    :class="getButtonClass"
+    @click="onClick"
   >
-    <template #icon>
-      <slot name="icon" />
+    <template v-if="hasIconSlot" #icon>
+      <slot name="icon">
+        <Icon v-if="preIcon" :icon="preIcon" :size="iconSize" />
+      </slot>
     </template>
     <template #default="data">
-      <Icon v-if="preIcon" :icon="preIcon" :size="iconSize" />
       <slot v-bind="data || {}" />
       <Icon v-if="postIcon" :icon="postIcon" :size="iconSize" />
     </template>

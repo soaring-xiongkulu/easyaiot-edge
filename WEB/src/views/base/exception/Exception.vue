@@ -1,5 +1,5 @@
 <script lang="tsx">
-import { Button, Result } from 'ant-design-vue'
+import { Result } from 'ant-design-vue'
 import { computed, defineComponent, ref, unref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ExceptionEnum } from '@/enums/exceptionEnum'
@@ -9,7 +9,7 @@ import { useDesign } from '@/hooks/web/useDesign'
 import { useI18n } from '@/hooks/web/useI18n'
 import { useGo, useRedo } from '@/hooks/web/usePage'
 import { PageEnum } from '@/enums/pageEnum'
-
+import { Button } from '@/components/Button'
 interface MapValue {
   title: string
   subTitle: string

@@ -8,7 +8,7 @@ import { useLockStore } from '@/store/modules/lock'
 import { useI18n } from '@/hooks/web/useI18n'
 import { useDesign } from '@/hooks/web/useDesign'
 import headerImg from '@/assets/images/header.jpg'
-
+import { Button } from '@/components/Button'
 const InputPassword = Input.Password
 
 const password = ref('')
@@ -93,15 +93,15 @@ function handleShowForm(show = false) {
             {{ t('sys.lock.alert') }}
           </span>
           <div :class="`${prefixCls}-entry__footer enter-x`">
-            <a-button type="link" size="small" class="enter-x mr-2 mt-2" :disabled="loading" @click="handleShowForm(true)">
+            <Button type="link" size="small" class="enter-x mr-2 mt-2" :disabled="loading" @click="handleShowForm(true)">
               {{ t('common.back') }}
-            </a-button>
-            <a-button type="link" size="small" class="enter-x mr-2 mt-2" :disabled="loading" @click="goLogin">
+            </Button>
+            <Button type="link" size="small" class="enter-x mr-2 mt-2" :disabled="loading" @click="goLogin">
               {{ t('sys.lock.backToLogin') }}
-            </a-button>
-            <a-button class="mt-2" type="link" size="small" :loading="loading" @click="unLock()">
+            </Button>
+            <Button class="mt-2" type="link" size="small" :loading="loading" @click="unLock()">
               {{ t('sys.lock.entry') }}
-            </a-button>
+            </Button>
           </div>
         </div>
       </div>

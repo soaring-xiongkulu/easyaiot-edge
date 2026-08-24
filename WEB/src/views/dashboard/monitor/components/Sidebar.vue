@@ -53,38 +53,59 @@
         <span class="section-title">设备目录</span>
         <div class="header-actions">
           <span class="device-count" v-if="!loading && treeData.length > 0">
-            {{ getTotalDeviceCount(treeData) }} 个设备
+            {{ playableLeafCount }} 个通道
           </span>
         </div>
       </div>
-      <!-- 设备树 -->
+      <!-- 设备树（与分屏监控一致：搜索框固定，树列表区域滚动） -->
       <div class="sidebar-tree">
-        <BasicTree
-          :tree-data="treeData"
-          :expanded-keys="expandedKeys"
-          :selected-keys="selectedKeys"
-          :loading="loading"
-          search
-          :default-expand-all="true"
-          :click-row-to-expand="false"
-          :render-icon="renderTreeIcon"
-          tree-wrapper-class-name="sidebar-tree-wrapper"
-          @update:expanded-keys="handleExpandedKeysChange"
-          @select="handleTreeSelect"
-        />
+        <div class="sidebar-tree-scroll">
+          <BasicTree
+            class="sidebar-device-tree"
+            :tree-data="treeData"
+            :expanded-keys="expandedKeys"
+            :selected-keys="selectedKeys"
+            :loading="loading"
+            search
+            :showIcon="true"
+            :indent="12"
+            :click-row-to-expand="false"
+            :load-data="onLoadGbDeviceChannels"
+            @update:expanded-keys="handleExpandedKeysChange"
+            @select="handleTreeSelect"
+          />
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script lang="ts" setup>
-import {computed, ref, watch, onMounted, onUnmounted, h} from 'vue'
-import {Icon} from '@/components/Icon'
-import {BasicTree} from '@/components/Tree'
-import type {TreeItem} from '@/components/Tree'
-import {getDirectoryList, getDirectoryDevices, getDeviceList, type DeviceDirectory, type DeviceInfo} from '@/api/device/camera'
-import {queryAlarmList, getDashboardStatistics} from '@/api/device/calculate'
-import {useMessage} from '@/hooks/web/useMessage'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { Icon } from '@/components/Icon'
+import { BasicTree } from '@/components/Tree'
+import type { TreeItem } from '@/components/Tree'
+import type { MonitorTreeDeviceNode } from '@/api/device/camera'
+import { formatCameraDeviceLabel, isGb28181Device } from '@/views/camera/utils/deviceLabel'
+import {
+  collectMonitorTreeExpandedKeys,
+  countMonitorTreePlayableLeaves,
+  findMonitorGbDeviceByChannel,
+  findMonitorTreeNodeByKey,
+} from '@/views/camera/utils/monitorDeviceTree'
+import { buildWvpChannelTreeNodes, parseGbChannelKey, type GbChannelRef } from '@/views/camera/utils/gb28181Tree'
+import { getDeviceChannels } from '@/api/device/gb28181'
+import { getCachedMonitorDirectoryTreeBundle, invalidateMonitorDirectoryTreeCache } from '@/views/camera/utils/monitorDirectoryTreeCache'
+import { loadMonitorDirectoryTreeWithCache } from '@/views/camera/utils/monitorDirectoryTreeLoad'
+import { syncGb28181DevicesInBackground } from '@/views/camera/utils/wvpGbSync'
+import { isGb28181Enabled } from '@/utils/deployProfile'
+import {
+  enrichWvpChannelTreeNodes,
+  resolveMonitorGbChannelDisplayName,
+} from '@/views/camera/utils/monitorGbDisplay'
+import { getDashboardStatistics } from '@/api/device/calculate'
+import { useMessage } from '@/hooks/web/useMessage'
+import type { TreeProps } from 'ant-design-vue'
 
 defineOptions({
   name: 'MonitorSidebar'
@@ -97,7 +118,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'device-change', device: any): void
   (e: 'device-play', device: any): void
-  (e: 'stream-type-change', type: 'video' | 'ai'): void
 }>()
 
 const {createMessage} = useMessage()
@@ -106,7 +126,6 @@ const expandedKeys = ref<string[]>([])
 const selectedKeys = ref<string[]>([])
 const treeData = ref<TreeItem[]>([])
 const loading = ref(false)
-const streamType = ref<'video' | 'ai'>('video')
 
 // 统计数据
 const statistics = ref({
@@ -116,132 +135,76 @@ const statistics = ref({
   modelCount: 0
 })
 
-// 将目录和设备转换为树形结构
-const convertToTreeData = (directories: DeviceDirectory[], devices: DeviceInfo[]): TreeItem[] => {
-  return directories.map((dir) => {
-    const directoryKey = `dir_${dir.id}`
-    const children: TreeItem[] = []
-    
-    // 添加子目录
-    if (dir.children && dir.children.length > 0) {
-      const subTree = convertToTreeData(dir.children, devices)
-      children.push(...subTree)
+const playableLeafCount = computed(() => countMonitorTreePlayableLeaves(treeData.value))
+
+const onLoadGbDeviceChannels: TreeProps['loadData'] = (treeNode) => {
+  return new Promise<void>((resolve) => {
+    const key = String(treeNode?.key ?? treeNode?.eventKey ?? '')
+    if (!key.startsWith('gb_dev_')) {
+      resolve()
+      return
     }
-    
-    // 添加该目录下的设备
-    const dirDevices = devices.filter(device => device.directory_id === dir.id)
-    dirDevices.forEach(device => {
-      children.push({
-        key: `device_${device.id}`,
-        title: device.name || device.id,
-        isDevice: true,
-        isDirectory: false,
-        device: device,
-        icon: 'ant-design:camera-filled',
-      } as TreeItem)
-    })
-    
-    return {
-      key: directoryKey,
-      title: dir.name,
-      isDirectory: true,
-      directory: dir,
-      icon: 'ant-design:folder-outlined',
-      children: children.length > 0 ? children : undefined,
-    } as TreeItem
+    const sipDeviceId = key.slice('gb_dev_'.length)
+    const dataRef = (treeNode.dataRef ?? treeNode) as TreeItem
+    if (dataRef?.children?.length) {
+      resolve()
+      return
+    }
+
+    getDeviceChannels(sipDeviceId)
+      .then((res) => {
+        const list = res.data || res.list || []
+        dataRef.children = enrichWvpChannelTreeNodes(
+          buildWvpChannelTreeNodes(list, sipDeviceId),
+          treeData.value,
+        )
+        dataRef.isLeaf = !dataRef.children?.length
+        treeData.value = [...treeData.value]
+        if (!expandedKeys.value.includes(key)) {
+          expandedKeys.value = [...expandedKeys.value, key]
+        }
+        resolve()
+      })
+      .catch(() => resolve())
   })
 }
 
-// 加载目录和设备数据
-const loadTreeData = async () => {
-  try {
-    loading.value = true
-    // 获取目录列表
-    const dirResponse = await getDirectoryList()
-    const dirData = dirResponse.code !== undefined ? dirResponse.data : dirResponse
-    
-    // 获取所有设备（不分页，获取全部）
-    const deviceResponse = await getDeviceList({
-      pageNo: 1,
-      pageSize: 10000, // 获取所有设备
-    })
-    
-    // 处理设备数据 - 可能是数组或包含list/records的对象
-    let deviceData: any[] = []
-    if (deviceResponse) {
-      if (Array.isArray(deviceResponse)) {
-        deviceData = deviceResponse
-      } else if (deviceResponse.code !== undefined) {
-        deviceData = deviceResponse.data?.list || deviceResponse.data?.records || deviceResponse.data || []
-      } else if (deviceResponse.list) {
-        deviceData = deviceResponse.list
-      } else if (deviceResponse.records) {
-        deviceData = deviceResponse.records
-      } else if (Array.isArray(deviceResponse.data)) {
-        deviceData = deviceResponse.data
+const applyMonitorTreeBundle = (bundle: { treeItems: TreeItem[] }) => {
+  treeData.value = bundle.treeItems
+  expandedKeys.value = collectMonitorTreeExpandedKeys(treeData.value)
+}
+
+const loadTreeData = async (options?: { force?: boolean }) => {
+  const hasCache = !!getCachedMonitorDirectoryTreeBundle()?.treeItems?.length
+  if (!hasCache) loading.value = true
+
+  await loadMonitorDirectoryTreeWithCache({
+    force: options?.force,
+    skipSync: true,
+    onBundle: (bundle) => {
+      applyMonitorTreeBundle(bundle)
+    },
+    onError: (error) => {
+      console.error('加载设备目录失败', error)
+      if (!treeData.value.length) {
+        createMessage.error('加载设备目录失败: ' + (error as Error)?.message)
+        treeData.value = []
       }
-    }
-    
-    console.log('目录数据:', dirData)
-    console.log('设备数据:', deviceData)
-    
-    if (dirData && Array.isArray(dirData) && deviceData && Array.isArray(deviceData)) {
-      // 获取没有目录的设备
-      const devicesWithoutDir = deviceData.filter((device: DeviceInfo) => !device.directory_id)
-      
-      // 转换目录树
-      const tree = convertToTreeData(dirData, deviceData)
-      
-      // 如果有未分配目录的设备，添加到根节点
-      if (devicesWithoutDir.length > 0) {
-        devicesWithoutDir.forEach((device: DeviceInfo) => {
-          tree.push({
-            key: `device_${device.id}`,
-            title: device.name || device.id,
-            isDevice: true,
-            isDirectory: false,
-            device: device,
-            icon: 'ant-design:camera-filled',
-          } as TreeItem)
-        })
-      }
-      
-      treeData.value = tree
-      console.log('树形数据:', treeData.value)
-      
-      // 默认展开所有目录节点
-      const getAllKeys = (nodes: any[]): string[] => {
-        let keys: string[] = []
-        nodes.forEach((node) => {
-          if (node.isDirectory) {
-            keys.push(node.key)
-          }
-          if (node.children && node.children.length > 0) {
-            keys = keys.concat(getAllKeys(node.children))
-          }
-        })
-        return keys
-      }
-      expandedKeys.value = getAllKeys(treeData.value)
-      
-      // 摄像头数量会在loadStatistics中统一更新，这里不需要单独设置
-    } else {
-      console.warn('数据格式不正确:', { dirData, deviceData })
-      treeData.value = []
-      // 如果至少有一些数据，显示提示
-      if (!dirData || !Array.isArray(dirData)) {
-        createMessage.warning('目录数据格式不正确')
-      }
-      if (!deviceData || !Array.isArray(deviceData)) {
-        createMessage.warning('设备数据格式不正确')
-      }
-    }
-  } catch (error) {
-    console.error('加载设备目录失败', error)
-    createMessage.error('加载设备目录失败: ' + (error as Error).message)
-    treeData.value = []
-  } finally {
-    loading.value = false
+    },
+    onRefreshingChange: (v) => {
+      if (!treeData.value.length) loading.value = v
+    },
+  })
+  loading.value = false
+}
+
+/** 首页进入时后台同步 WVP 国标设备，避免必须先打开分屏监控点「刷新」 */
+const syncGbDevicesInBackground = async () => {
+  if (!isGb28181Enabled()) return
+  const { created } = await syncGb28181DevicesInBackground()
+  if (created > 0) {
+    invalidateMonitorDirectoryTreeCache()
+    await loadTreeData({ force: true })
   }
 }
 
@@ -271,63 +234,101 @@ const handleExpandedKeysChange = (keys: string[]) => {
   expandedKeys.value = keys
 }
 
-// 处理树节点选择
-const handleTreeSelect = (keys: string[], info: any) => {
-  if (keys.length === 0) {
+function buildGbChannelPlayPayload(gb: GbChannelRef, node: TreeItem | null) {
+  const playId = `gb_ch_${gb.sipDeviceId},${gb.channelId}`
+  const synced =
+    findMonitorGbDeviceByChannel(treeData.value, gb.sipDeviceId, gb.channelId) ??
+    ((node as TreeItem & { device?: MonitorTreeDeviceNode })?.device ?? null)
+  const displayName = resolveMonitorGbChannelDisplayName(
+    gb.sipDeviceId,
+    gb.channelId,
+    treeData.value,
+    gb.name,
+  )
+  const monitorDevice: MonitorTreeDeviceNode = synced ?? {
+    type: 'device',
+    id: playId,
+    name: displayName.replace(/^\[GB28181\]\s*/, '').trim() || gb.name,
+    source: `gb28181://${gb.sipDeviceId}/${gb.channelId}`,
+    device_kind: 'gb28181',
+  }
+  return {
+    id: playId,
+    name: displayName,
+    location: node ? getFullPath(node, treeData.value) : '',
+    device: monitorDevice,
+  }
+}
+
+// 处理树节点选择（与分屏监控一致：国标设备下展开通道后点播）
+const handleTreeSelect = (keys: string[], _info?: unknown) => {
+  if (!keys.length) return
+
+  const selectedKey = String(keys[0])
+
+  if (selectedKey.startsWith('gb_dev_')) {
+    createMessage.info('请展开国标设备并选择具体通道')
     return
   }
-  
-  const selectedKey = keys[0]
-  const node = findNodeByKey(treeData.value, selectedKey)
-  
-  if (node && node.isDevice && node.device) {
-    const device = {
-      id: node.device.id,
-      name: node.device.name || node.device.id,
-      location: getFullPath(node, treeData.value),
-      device: node.device,
+  if (selectedKey.startsWith('nvr_')) {
+    createMessage.info('请展开 NVR 并选择具体通道')
+    return
+  }
+  if (selectedKey.startsWith('gb_dir_') || selectedKey.startsWith('dir_')) {
+    createMessage.info('请选择摄像头或国标通道')
+    return
+  }
+
+  const node = findMonitorTreeNodeByKey(treeData.value, selectedKey)
+  if (!node) return
+
+  if (selectedKey.startsWith('gb_ch_')) {
+    let gb = parseGbChannelKey(selectedKey)
+    if ((node as any).gbChannel) {
+      gb = (node as any).gbChannel as GbChannelRef
+    }
+    if (!gb) {
+      createMessage.warning('无效国标通道')
+      return
     }
     selectedKeys.value = [selectedKey]
-    emit('device-change', device)
-    
-    // 检查是否有流地址，优先使用http_stream（大屏地址使用摄像头的http地址）
-    // 同时传递 AI 流地址
-    if (node.device.http_stream || node.device.rtmp_stream || node.device.ai_http_stream || node.device.ai_rtmp_stream) {
-      emit('device-play', {
-        ...device,
-        http_stream: node.device.http_stream, // 优先传递http_stream
-        rtmp_stream: node.device.rtmp_stream,
-        ai_http_stream: node.device.ai_http_stream, // AI HTTP流地址
-        ai_rtmp_stream: node.device.ai_rtmp_stream, // AI RTMP流地址
-      })
-    }
+    const payload = buildGbChannelPlayPayload(gb, node)
+    emit('device-change', payload)
+    emit('device-play', payload)
+    return
   }
-}
 
-// 根据key查找节点
-const findNodeByKey = (nodes: TreeItem[], key: string): TreeItem | null => {
-  for (const node of nodes) {
-    if (node.key === key) {
-      return node as TreeItem
-    }
-    if (node.children && node.children.length > 0) {
-      const found = findNodeByKey(node.children as TreeItem[], key)
-      if (found) {
-        return found
-      }
-    }
+  if (!selectedKey.startsWith('device_')) {
+    createMessage.info('请选择摄像头或国标通道')
+    return
   }
-  return null
-}
 
-// 渲染树节点图标
-const renderTreeIcon = (node: TreeItem) => {
-  if (node.isDirectory) {
-    return 'ant-design:folder-outlined'
-  } else if (node.isDevice) {
-    return 'ant-design:camera-filled'
+  const device = (node as any).device as MonitorTreeDeviceNode | undefined
+  if (!device) {
+    createMessage.warning('无效设备')
+    return
   }
-  return ''
+  if (isGb28181Device(device.source, device.device_kind)) {
+    createMessage.info('请展开上级国标设备并选择通道')
+    return
+  }
+
+  selectedKeys.value = [selectedKey]
+  const payload = {
+    id: device.id,
+    name: formatCameraDeviceLabel(device),
+    location: getFullPath(node, treeData.value),
+    device,
+  }
+  emit('device-change', payload)
+  emit('device-play', {
+    ...payload,
+    http_stream: device.http_stream,
+    rtmp_stream: device.rtmp_stream,
+    ai_http_stream: device.ai_http_stream,
+    ai_rtmp_stream: device.ai_rtmp_stream,
+    source: device.source,
+  })
 }
 
 // 获取完整路径
@@ -355,32 +356,6 @@ const getFullPath = (node: TreeItem, treeNodes: TreeItem[]): string => {
   return fullPath ? fullPath.join(' / ') : (node.title as string)
 }
 
-// 获取设备总数
-const getTotalDeviceCount = (nodes: TreeItem[]): number => {
-  let count = 0
-  const countDevices = (nodes: TreeItem[]) => {
-    nodes.forEach(node => {
-      if (node.isDevice) {
-        count++
-      }
-      if (node.children && node.children.length > 0) {
-        countDevices(node.children as TreeItem[])
-      }
-    })
-  }
-  countDevices(nodes)
-  return count
-}
-
-// 处理流类型切换
-const handleStreamTypeChange = (type: 'video' | 'ai') => {
-  if (streamType.value === type) {
-    return
-  }
-  streamType.value = type
-  emit('stream-type-change', type)
-}
-
 // 刷新定时器
 let statisticsTimer: any = null
 let delayTimer: any = null
@@ -391,6 +366,7 @@ onMounted(() => {
   isMounted = true
   
   loadTreeData()
+  syncGbDevicesInBackground()
   // 初始加载统计数据
   loadStatistics()
   
@@ -439,7 +415,9 @@ onUnmounted(() => {
 
 <style lang="less" scoped>
 .monitor-sidebar {
-  width: 280px;
+  width: 350px;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -508,67 +486,6 @@ onUnmounted(() => {
       background: rgba(52, 134, 218, 0.15);
       border-radius: 4px;
       border: 1px solid rgba(52, 134, 218, 0.3);
-    }
-  }
-}
-
-.stream-type-section {
-  flex-shrink: 0;
-}
-
-.stream-type-tabs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  justify-content: flex-start; // 靠左对齐
-}
-
-.tab-item {
-  padding: 8px 16px;
-  background: linear-gradient(135deg, rgba(52, 134, 218, 0.15), rgba(48, 82, 174, 0.1));
-  border: 1px solid rgba(52, 134, 218, 0.3);
-  border-radius: 6px;
-  color: rgba(200, 220, 255, 0.7);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s;
-  position: relative;
-  overflow: hidden;
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(135deg, rgba(52, 134, 218, 0.1), transparent);
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-
-  &:hover {
-    border-color: rgba(52, 134, 218, 0.6);
-    color: rgba(200, 220, 255, 0.9);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(52, 134, 218, 0.2);
-
-    &::before {
-      opacity: 1;
-    }
-  }
-
-  &.active {
-    background: linear-gradient(135deg, rgba(52, 134, 218, 0.3), rgba(52, 134, 218, 0.2));
-    border-color: #3486da;
-    color: #ffffff;
-    box-shadow: 0 0 12px rgba(52, 134, 218, 0.4);
-    text-shadow: 0 0 8px rgba(52, 134, 218, 0.5);
-
-    &::before {
-      opacity: 1;
     }
   }
 }
@@ -703,7 +620,46 @@ onUnmounted(() => {
   z-index: 1;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: linear-gradient(to bottom, rgba(15, 34, 73, 0.4), rgba(24, 46, 90, 0.3));
+}
+
+.sidebar-tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  :deep(.sidebar-device-tree) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    .ant-spin-nested-loading,
+    .ant-spin-container {
+      flex: 1;
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: transparent !important;
+    }
+
+    .scroll-container {
+      flex: 1;
+      min-height: 0;
+      background: transparent !important;
+    }
+
+    .scrollbar {
+      height: 100%;
+    }
+  }
 
   // 覆盖 BasicTree 的所有背景色
   :deep(.tree) {
@@ -741,19 +697,38 @@ onUnmounted(() => {
     border-bottom: none !important;
   }
 
-  // 覆盖 Spin 组件的背景
-  :deep(.ant-spin-container) {
-    background: transparent !important;
-  }
-
-  // 覆盖 ScrollContainer 的背景
-  :deep(.scroll-container) {
-    background: transparent !important;
-  }
-
   :deep(.ant-tree) {
     background: transparent !important;
     color: rgba(200, 220, 255, 0.9);
+  }
+
+  /* 与分屏监控一致：叶子前占位更窄、行高更紧凑 */
+  :deep(.sidebar-device-tree) {
+    .ant-tree-switcher {
+      width: 16px;
+      margin-inline-end: 2px;
+    }
+
+    .ant-tree-switcher-noop {
+      width: 8px;
+    }
+
+    .ant-tree-node-content-wrapper {
+      padding-inline: 2px 6px;
+      min-height: 26px;
+      line-height: 26px;
+    }
+
+    .ant-tree-title,
+    [class*='-tree__title'] {
+      padding-left: 0 !important;
+    }
+
+    [class*='-tree__title'] .mr-1,
+    [class*='-tree__title'] .app-iconify {
+      margin-right: 4px !important;
+      font-size: 13px !important;
+    }
   }
 
   // 覆盖树节点的背景
@@ -829,32 +804,22 @@ onUnmounted(() => {
       }
     }
   }
-}
 
-.sidebar-tree-wrapper {
-  height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  background: transparent !important;
-
-  // 自定义滚动条
-  &::-webkit-scrollbar {
-    width: 6px;
+  /* 大屏主题：滚动条悬停可见（与分屏监控 ScrollContainer 行为一致） */
+  :deep(.scrollbar__bar) {
+    opacity: 0.35;
   }
 
-  &::-webkit-scrollbar-track {
-    background: rgba(52, 134, 218, 0.1);
-    border-radius: 3px;
+  :deep(.scrollbar:hover .scrollbar__bar) {
+    opacity: 1;
   }
 
-  &::-webkit-scrollbar-thumb {
-    background: rgba(52, 134, 218, 0.5);
-    border-radius: 3px;
-    transition: all 0.3s;
+  :deep(.scrollbar__thumb) {
+    background-color: rgba(52, 134, 218, 0.45);
+  }
 
-    &:hover {
-      background: rgba(52, 134, 218, 0.7);
-    }
+  :deep(.scrollbar__thumb:hover) {
+    background-color: rgba(52, 134, 218, 0.7);
   }
 }
 </style>

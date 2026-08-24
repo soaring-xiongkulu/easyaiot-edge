@@ -422,7 +422,14 @@ export default defineComponent({
           )}
           <Spin wrapperClassName={unref(props.treeWrapperClassName)} spinning={unref(props.loading)} tip="加载中...">
             <ScrollContainer style={scrollStyle} v-show={!unref(getNotFound)}>
-              <Tree {...unref(getBindValues)} showIcon={false} treeData={treeData.value}>
+              <Tree
+                {...unref(getBindValues)}
+                showIcon={false}
+                treeData={treeData.value}
+                onSelect={(selectedKeys, e) => {
+                  emit('select', selectedKeys, e)
+                }}
+              >
                 {extendSlots(slots, ['title'])}
               </Tree>
             </ScrollContainer>

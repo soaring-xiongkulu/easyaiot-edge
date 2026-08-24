@@ -296,7 +296,12 @@ export function useDataSource(
         opt?.filterInfo ?? {},
       )
       if (beforeFetch && isFunction(beforeFetch)) {
-        params = (await beforeFetch(params)) || params
+        const beforeResult = await beforeFetch(params)
+        // 约定：beforeFetch 返回 false 时中止本次请求（勿用 `|| params`，否则 false 会被吞掉）
+        if (beforeResult === false) {
+          return
+        }
+        params = beforeResult || params
       }
 
       if(params.customApi != null || params.customApi != undefined) {

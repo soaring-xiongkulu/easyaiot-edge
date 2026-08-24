@@ -5,7 +5,7 @@ import { accountBindList } from './data'
 import { Icon } from '@/components/Icon'
 import { CollapseContainer } from '@/components/Container/index'
 import { getUserProfileApi } from '@/api/base/profile'
-
+import { Button } from '@/components/Button'
 async function init() {
   const userInfo = await getUserProfileApi()
   // TODO
@@ -36,9 +36,9 @@ onMounted(async () => {
             </template>
             <template #title>
               {{ item.title }}
-              <a-button v-if="item.extra" type="link" size="small" class="float-right mr-7.5 mt-2.5 cursor-pointer">
+              <Button v-if="item.extra" type="link" size="small" class="float-right mr-7.5 mt-2.5 cursor-pointer">
                 {{ item.extra }}
-              </a-button>
+              </Button>
             </template>
             <template #description>
               <div>{{ item.description }}</div>

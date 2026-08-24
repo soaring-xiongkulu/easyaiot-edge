@@ -11,10 +11,12 @@ import { openWindow } from '@/utils'
 
 import { useI18n } from '@/hooks/web/useI18n'
 import { useRootSetting } from '@/hooks/setting/useRootSetting'
+import { usePlatformBranding } from '@/hooks/web/usePlatformBranding'
 
 defineOptions({ name: 'LayoutFooter' })
 
-const SITE_TITLE = ref(import.meta.env.VITE_GLOB_APP_TITLE)
+const { config } = usePlatformBranding()
+const SITE_TITLE = computed(() => config.value.platformName)
 
 const Footer = Layout.Footer
 

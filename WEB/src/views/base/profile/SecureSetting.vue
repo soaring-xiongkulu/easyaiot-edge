@@ -5,7 +5,7 @@ import PasswordModal from './PasswordModal.vue'
 import { CollapseContainer } from '@/components/Container/index'
 import { useModal } from '@/components/Modal'
 import { useMessage } from '@/hooks/web/useMessage'
-
+import { Button } from '@/components/Button'
 const ListItem = List.Item
 const ListItemMeta = List.Item.Meta
 
@@ -30,9 +30,9 @@ function handleSuccess() {
             <template #title>
               {{ item.title }}
               <div v-if="item.extra" class="float-right mr-7.5 mt-2.5 cursor-pointer font-normal text-blue-500">
-                <a-button type="link" @click="handleEdit(item.title)">
+                <Button type="link" @click="handleEdit(item.title)">
                   {{ item.extra }}
-                </a-button>
+                </Button>
               </div>
             </template>
             <template #description>
