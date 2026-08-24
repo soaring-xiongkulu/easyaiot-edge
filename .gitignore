@@ -62,3 +62,23 @@ TASK/cmake-build-debug/
 # pnpm lockfile (WEB)
 WEB/pnpm-lock.yaml
 DEVICE/server
+
+# 本地构建缓存与依赖（onnxruntime 等第三方库）
+/.build-cache/
+/.deps/
+
+# 本地环境变量与部署状态文件（由安装/部署脚本生成，勿提交）
+.env
+.scripts/docker/.deploy_profile
+.scripts/docker/.runtime_images_pulled
+.scripts/docker/.web_deploy_profile_built
+RUNTIME/deploy.env
+RUNTIME/VERSION
+WEB/conf/_app.config.js
+
+# 部署期运行时数据目录（deploy/）
+/deploy/db_data/
+/deploy/redis_data/
+/deploy/srs_data/*
+!/deploy/srs_data/conf/
+!/deploy/srs_data/conf/**

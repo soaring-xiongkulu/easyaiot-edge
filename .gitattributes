@@ -1,4 +1,12 @@
+* text=auto
+
 *.png binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.rdb binary
+*.engine binary
 *.jpg binary
 *.mp4 binary
 *.flv binary
