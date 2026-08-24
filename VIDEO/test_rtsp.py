@@ -78,7 +78,7 @@ def test_rtsp_connection(rtsp_url: str, timeout: int = 5) -> bool:
         result = subprocess.run(
             [
                 'ffprobe',
-                '-rtsp_transport', 'tcp',
+                '-rtsp_transport', 'udp',
                 '-i', rtsp_url,
                 '-v', 'error',
                 '-show_entries', 'stream=codec_name,width,height,r_frame_rate',
@@ -129,7 +129,7 @@ def test_rtsp_connection(rtsp_url: str, timeout: int = 5) -> bool:
 def start_rtsp_to_rtmp_push(rtsp_url: str, rtmp_url: str, 
                             bitrate: str = '2000k',
                             preset: str = 'veryfast',
-                            rtsp_transport: str = 'tcp',
+                            rtsp_transport: str = 'udp',
                             enable_audio: bool = False) -> Optional[subprocess.Popen]:
     """
     启动RTSP到RTMP的推流
@@ -139,7 +139,7 @@ def start_rtsp_to_rtmp_push(rtsp_url: str, rtmp_url: str,
         rtmp_url: RTMP输出流地址
         bitrate: 视频比特率 (默认: 2000k)
         preset: 编码预设 (默认: veryfast, 可选: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
-        rtsp_transport: RTSP传输协议 (tcp 或 udp, 默认: tcp)
+        rtsp_transport: RTSP传输协议 (tcp 或 udp, 默认: udp)
         enable_audio: 是否启用音频 (默认: False)
     
     Returns:
@@ -150,7 +150,7 @@ def start_rtsp_to_rtmp_push(rtsp_url: str, rtmp_url: str,
     # 构建FFmpeg命令
     ffmpeg_cmd = [
         'ffmpeg',
-        '-rtsp_transport', rtsp_transport,  # 使用TCP传输，更稳定
+        '-rtsp_transport', rtsp_transport,
         '-i', rtsp_url,  # RTSP输入流
         '-c:v', 'libx264',  # 视频编码器
         '-b:v', bitrate,  # 视频比特率
@@ -297,9 +297,9 @@ def main():
     parser.add_argument(
         '--rtsp-transport',
         type=str,
-        default='tcp',
+        default='udp',
         choices=['tcp', 'udp'],
-        help='RTSP传输协议 (默认: tcp)'
+        help='RTSP传输协议 (默认: udp)'
     )
     
     parser.add_argument(

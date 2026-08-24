@@ -18,11 +18,12 @@ sys.path.insert(0, video_root)
 
 from flask import Flask
 from models import db, AlgorithmTask, Device, SnapSpace
+from app.utils.alert_images_paths import resolve_alert_images_root
 from sqlalchemy import text
 
 # 初始化Flask应用
 app = Flask(__name__)
-database_url = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/iot-edge-video20')
+database_url = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/iot_video')
 database_url = database_url.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -58,6 +59,7 @@ def check_snapshot_algorithm_tasks():
             print(f"  任务类型: {task.task_type}")
             print(f"  是否启用: {task.is_enabled}")
             print(f"  告警事件启用: {task.alert_event_enabled}")
+            print(f"  告警通知启用: {task.alert_notification_enabled}")
             
             # 检查关联的设备
             if task.devices:
@@ -108,7 +110,7 @@ def check_alert_images_dir(task_id):
     print("3. 检查告警图片保存目录")
     print("=" * 80)
     
-    alert_image_dir = os.path.join(video_root, 'alert_images', f'task_{task_id}')
+    alert_image_dir = os.path.join(resolve_alert_images_root(video_root), f'task_{task_id}')
     
     if not os.path.exists(alert_image_dir):
         print(f"⚠️  告警图片目录不存在: {alert_image_dir}")
