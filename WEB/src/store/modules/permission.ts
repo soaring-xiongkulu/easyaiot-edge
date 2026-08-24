@@ -17,6 +17,7 @@ import {filter} from '@/utils/helper/treeHelper'
 import projectSetting from '@/settings/projectSetting'
 import {PageEnum} from '@/enums/pageEnum'
 import {PermissionModeEnum} from '@/enums/appEnum'
+import {isHarnessEnabled, isMenuHiddenByDeployProfile} from '@/utils/deployProfile'
 
 interface PermissionState {
   // Permission code list
@@ -130,6 +131,24 @@ export const usePermissionStore = defineStore('app-permission', {
         return !ignoreRoute
       }
 
+      /** 按部署形态裁剪后端菜单/路由（mini、standard 隐藏 IoT 平台未部署模块） */
+      const filterRoutesByDeployProfile = (routes: AppRouteRecordRaw[]): AppRouteRecordRaw[] => {
+        return routes
+          .filter((route) => {
+            if (route.name === 'HarnessManage' && !isHarnessEnabled())
+              return false
+            return !isMenuHiddenByDeployProfile(route.name)
+          })
+          .map((route) => {
+            if (!route.children?.length)
+              return route
+            return {
+              ...route,
+              children: filterRoutesByDeployProfile(route.children),
+            }
+          })
+      }
+
       /**
        * @description 根据设置的首页path，修正routes中的affix标记（固定首页）
        */
@@ -211,12 +230,9 @@ export const usePermissionStore = defineStore('app-permission', {
           // this function may only need to be executed once, and the actual project can be put at the right time by itself
           // 这个功能可能只需要执行一次，实际项目可以自己放在合适的时间
           let routeList: AppRouteRecordRaw[] = []
-          try {
-            routeList = userInfo.menus as AppRouteRecordRaw[]
-          } catch (error) {
-            console.error(error)
-            console.error(error)
-          }
+          const menus = userInfo?.menus
+          routeList = Array.isArray(menus) ? (menus as AppRouteRecordRaw[]) : []
+          routeList = filterRoutesByDeployProfile(routeList)
           // Dynamically introduce components
           // 动态引入组件
           routeList = transformObjToRoute(routeList)
@@ -236,8 +252,10 @@ export const usePermissionStore = defineStore('app-permission', {
       }
 
       // 从用户中获取权限
-      if (userInfo)
-        this.setPermCodeList(userInfo.permissions)
+      if (userInfo) {
+        const perms = userInfo.permissions
+        this.setPermCodeList(Array.isArray(perms) ? perms : [])
+      }
 
       patchHomeAffix(routes)
       return routes

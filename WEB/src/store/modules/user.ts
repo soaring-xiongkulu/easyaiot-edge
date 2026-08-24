@@ -8,11 +8,11 @@ import { router } from '@/router'
 import type { RoleEnum } from '@/enums/roleEnum'
 import { PageEnum } from '@/enums/pageEnum'
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, ROLES_KEY, USER_INFO_KEY } from '@/enums/cacheEnum'
-import { PAGE_NOT_FOUND_ROUTE } from '@/router/routes/basic'
+import { PAGE_NOT_FOUND_ROUTE, RULE_CHAINS_NODERED_ROUTE } from '@/router/routes/basic'
 import { usePermissionStore } from '@/store/modules/permission'
 import { useI18n } from '@/hooks/web/useI18n'
 import { useMessage } from '@/hooks/web/useMessage'
-import { getAuthCache, setAuthCache } from '@/utils/auth'
+import { getAuthCache, setAuthCache, switchAuthStorage, clearAuthCache, setAccessToken as saveAccessToken, setRefreshToken as saveRefreshToken } from '@/utils/auth'
 import { doLogout, getUserInfo, loginApi, smsLogin } from '@/api/base/user'
 import type { GetUserInfoModel, LoginParams, SmsLoginParams } from '@/api/base/model/userModel'
 
@@ -63,12 +63,18 @@ export const useUserStore = defineStore('app-user', {
   },
   actions: {
     setAccessToken(info: string | undefined) {
-      this.accessToken = info || '' // for null or undefined value
-      setAuthCache(ACCESS_TOKEN_KEY, info)
+      this.accessToken = info || ''
+      if (info)
+        saveAccessToken(info)
+      else
+        setAuthCache(ACCESS_TOKEN_KEY, info)
     },
     setRefreshToken(info: string | undefined) {
-      this.refreshToken = info || '' // for null or undefined value
-      setAuthCache(REFRESH_TOKEN_KEY, info)
+      this.refreshToken = info || ''
+      if (info)
+        saveRefreshToken(info)
+      else
+        setAuthCache(REFRESH_TOKEN_KEY, info)
     },
     setRoleList(roleList: RoleEnum[]) {
       this.roleList = roleList
@@ -95,11 +101,13 @@ export const useUserStore = defineStore('app-user', {
       params: LoginParams & {
         goHome?: boolean
         mode?: ErrorMessageMode
+        rememberMe?: boolean
       },
     ): Promise<GetUserInfoModel | null> {
       try {
-        const { goHome = true, mode, ...loginParams } = params
-        const data = await loginApi(loginParams, mode)
+        const { goHome = true, mode, rememberMe = false, ...loginParams } = params
+        switchAuthStorage(rememberMe)
+        const data = await loginApi({ ...loginParams, rememberMe }, mode)
         const { accessToken, refreshToken } = data
 
         // save token
@@ -154,6 +162,7 @@ export const useUserStore = defineStore('app-user', {
               console.error(e)
             }
           })
+          router.addRoute(RULE_CHAINS_NODERED_ROUTE as unknown as RouteRecordRaw)
           router.addRoute(PAGE_NOT_FOUND_ROUTE as unknown as RouteRecordRaw)
           permissionStore.setDynamicAddedRoute(true)
         }
@@ -190,8 +199,10 @@ export const useUserStore = defineStore('app-user', {
         }
       }
       this.setAccessToken(undefined)
+      this.setRefreshToken(undefined)
       this.setSessionTimeout(false)
       this.setUserInfo(null)
+      clearAuthCache(true)
       goLogin && router.push(PageEnum.BASE_LOGIN)
       window.location.reload()
     },

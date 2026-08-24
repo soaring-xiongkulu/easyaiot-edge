@@ -9,8 +9,14 @@ export class AxiosRetry {
    * 重试
    */
   retry(axiosInstance: AxiosInstance, error: AxiosError) {
-    const { config } = error.response
+    // 网络错误/超时/请求被取消时不存在 error.response，需从 error.config 取配置，
+    // 否则会抛出 “TypeError: error.response is undefined”，反而吞掉真正的错误。
+    const config = error.response?.config ?? error.config
+    if (!config)
+      return Promise.reject(error)
     const { waitTime, count } = config?.requestOptions?.retryRequest ?? {}
+    if (!count)
+      return Promise.reject(error)
     config.__retryCount = config.__retryCount || 0
     if (config.__retryCount >= count)
       return Promise.reject(error)

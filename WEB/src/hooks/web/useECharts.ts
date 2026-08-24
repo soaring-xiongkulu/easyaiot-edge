@@ -32,9 +32,44 @@ export function useECharts(elRef: Ref<HTMLDivElement>, theme: 'light' | 'dark' |
     } as EChartsOption
   })
 
+  function isInstanceAlive(instance: echarts.ECharts | null, el?: HTMLDivElement | null) {
+    if (!instance)
+      return false
+    if (typeof instance.isDisposed === 'function' && instance.isDisposed())
+      return false
+    const dom = typeof instance.getDom === 'function' ? instance.getDom() : null
+    if (!dom || !dom.isConnected)
+      return false
+    if (el && dom !== el)
+      return false
+    return true
+  }
+
+  function disposeInstance() {
+    if (!chartInstance)
+      return
+    try {
+      if (!chartInstance.isDisposed?.())
+        chartInstance.dispose()
+    }
+    catch {
+      // ignore dispose errors from already-detached nodes
+    }
+    chartInstance = null
+    removeResizeFn()
+    removeResizeFn = () => {}
+  }
+
   function initCharts(t = theme) {
     const el = unref(elRef)
     if (!el || !unref(el))
+      return
+
+    // Modal destroyOnClose 会重建 DOM；旧实例仍挂着已销毁节点时必须重建
+    if (!isInstanceAlive(chartInstance, el))
+      disposeInstance()
+
+    if (chartInstance)
       return
 
     chartInstance = echarts.init(el, t)
@@ -55,30 +90,48 @@ export function useECharts(elRef: Ref<HTMLDivElement>, theme: 'light' | 'dark' |
   function setOptions(options: EChartsOption, clear = true) {
     cacheOptions.value = options
     return new Promise((resolve) => {
-      if (unref(elRef)?.offsetHeight === 0) {
-        useTimeoutFn(() => {
-          setOptions(unref(getOptions))
+      const trySet = (retry = 0) => {
+        const el = unref(elRef)
+        if (!el || el.offsetHeight === 0) {
+          if (retry < 20) {
+            useTimeoutFn(() => trySet(retry + 1), 50)
+            return
+          }
           resolve(null)
-        }, 30)
-      }
-      nextTick(() => {
-        useTimeoutFn(() => {
-          if (!chartInstance) {
+          return
+        }
+
+        nextTick(() => {
+          if (!isInstanceAlive(chartInstance, el))
+            disposeInstance()
+
+          if (!chartInstance)
             initCharts(getDarkMode.value as 'default')
 
-            if (!chartInstance)
+          if (!chartInstance) {
+            if (retry < 20) {
+              useTimeoutFn(() => trySet(retry + 1), 50)
               return
+            }
+            resolve(null)
+            return
           }
-          clear && chartInstance?.clear()
 
-          chartInstance?.setOption(unref(getOptions))
+          clear && chartInstance.clear()
+          chartInstance.setOption(unref(getOptions))
+          chartInstance.resize()
           resolve(null)
-        }, 30)
-      })
+        })
+      }
+
+      useTimeoutFn(() => trySet(), 30)
     })
   }
 
   function resize() {
+    const el = unref(elRef)
+    if (!isInstanceAlive(chartInstance, el))
+      return
     chartInstance?.resize({
       animation: {
         duration: 300,
@@ -91,7 +144,7 @@ export function useECharts(elRef: Ref<HTMLDivElement>, theme: 'light' | 'dark' |
     () => getDarkMode.value,
     (theme) => {
       if (chartInstance) {
-        chartInstance.dispose()
+        disposeInstance()
         initCharts(theme as 'default')
         setOptions(cacheOptions.value)
       }
@@ -105,14 +158,13 @@ export function useECharts(elRef: Ref<HTMLDivElement>, theme: 'light' | 'dark' |
   })
 
   tryOnUnmounted(() => {
-    if (!chartInstance)
-      return
-    removeResizeFn()
-    chartInstance.dispose()
-    chartInstance = null
+    disposeInstance()
   })
 
   function getInstance(): echarts.ECharts | null {
+    const el = unref(elRef)
+    if (!isInstanceAlive(chartInstance, el))
+      disposeInstance()
     if (!chartInstance)
       initCharts(getDarkMode.value as 'default')
 
@@ -124,5 +176,6 @@ export function useECharts(elRef: Ref<HTMLDivElement>, theme: 'light' | 'dark' |
     resize,
     echarts,
     getInstance,
+    dispose: disposeInstance,
   }
 }

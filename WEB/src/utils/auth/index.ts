@@ -3,14 +3,65 @@ import { Persistent } from '@/utils/cache/persistent'
 import { ACCESS_TOKEN_KEY, CacheTypeEnum, REFRESH_TOKEN_KEY, TENANT_ID_KEY } from '@/enums/cacheEnum'
 import projectSetting from '@/settings/projectSetting'
 
+const REMEMBER_ME_KEY = 'REMEMBER_ME__'
+const JWT_TOKEN_KEY = 'jwt_token'
+
 const { permissionCacheType } = projectSetting
-const isLocal = permissionCacheType === CacheTypeEnum.LOCAL
+
+function useLocalStorage(): boolean {
+  const stored = localStorage.getItem(REMEMBER_ME_KEY)
+  if (stored !== null)
+    return stored === 'true'
+  return permissionCacheType === CacheTypeEnum.LOCAL
+}
+
+function getStorageFns() {
+  return useLocalStorage()
+    ? { get: Persistent.getLocal, set: Persistent.setLocal, clear: Persistent.clearLocal }
+    : { get: Persistent.getSession, set: Persistent.setSession, clear: Persistent.clearSession }
+}
+
+export function getRememberMe(): boolean {
+  const stored = localStorage.getItem(REMEMBER_ME_KEY)
+  if (stored !== null)
+    return stored === 'true'
+  return permissionCacheType === CacheTypeEnum.LOCAL
+}
+
+export function setRememberMe(remember: boolean) {
+  localStorage.setItem(REMEMBER_ME_KEY, String(remember))
+}
+
+export function syncJwtToken(token?: string | null) {
+  if (token)
+    localStorage.setItem(JWT_TOKEN_KEY, token)
+  else
+    localStorage.removeItem(JWT_TOKEN_KEY)
+}
+
+export function getJwtToken(): string {
+  return getAccessToken() || localStorage.getItem(JWT_TOKEN_KEY) || ''
+}
+
+let isLoggingOut = false
+
+/** 会话失效时统一跳转登录页（防重复触发） */
+export function handleSessionTimeout() {
+  if (isLoggingOut)
+    return
+  isLoggingOut = true
+  import('@/store/modules/user').then(({ useUserStoreWithOut }) => {
+    const userStore = useUserStoreWithOut()
+    userStore.logout(true)
+  })
+}
 
 export function getAccessToken(): string {
   return getAuthCache(ACCESS_TOKEN_KEY)
 }
 
 export function setAccessToken(value: string) {
+  syncJwtToken(value)
   return setAuthCache(ACCESS_TOKEN_KEY, value)
 }
 
@@ -31,16 +82,28 @@ export function setTenantId(value) {
 }
 
 export function getAuthCache<T>(key: BasicKeys) {
-  const fn = isLocal ? Persistent.getLocal : Persistent.getSession
-  return fn(key) as T
+  const { get } = getStorageFns()
+  return get(key) as T
 }
 
 export function setAuthCache(key: BasicKeys, value) {
-  const fn = isLocal ? Persistent.setLocal : Persistent.setSession
-  return fn(key, value, true)
+  const { set } = getStorageFns()
+  return set(key, value, true)
 }
 
 export function clearAuthCache(immediate = true) {
-  const fn = isLocal ? Persistent.clearLocal : Persistent.clearSession
-  return fn(immediate)
+  syncJwtToken(null)
+  Persistent.clearLocal(immediate)
+  Persistent.clearSession(immediate)
+}
+
+/** 登录时根据 rememberMe 切换存储介质并清理旧 Token */
+export function switchAuthStorage(remember: boolean) {
+  setRememberMe(remember)
+  if (remember) {
+    Persistent.clearSession(true)
+  }
+  else {
+    Persistent.clearLocal(true)
+  }
 }

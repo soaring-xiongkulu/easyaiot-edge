@@ -81,6 +81,7 @@
     "qrSignInFormTitle": "Qr code sign in",
     "registerButton": "Sign up",
     "rememberMe": "Remember me",
+    "rememberMe30Days": "Stay signed in for 30 days",
     "scanSign": "scanning the code to complete the login",
     "signInDesc": "Enter your personal details and get started!",
     "signInFormTitle": "User Sign in",

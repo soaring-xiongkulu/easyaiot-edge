@@ -81,6 +81,7 @@
     "qrSignInFormTitle": "二维码登录",
     "registerButton": "注册",
     "rememberMe": "记住我",
+    "rememberMe30Days": "30天免登录",
     "scanSign": "扫码后点击\"确认\"，即可完成登录",
     "signInDesc": "同时支持50万+设备同时在线！",
     "signInFormTitle": "平台登录",

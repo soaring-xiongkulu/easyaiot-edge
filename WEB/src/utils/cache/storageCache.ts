@@ -99,10 +99,17 @@ export function createStorage({
     }
 
     /**
-     * Delete all caches of this instance
+     * Delete all caches of this instance (only keys with this prefixKey)
+     * 注意：不可调用 storage.clear()，否则会误删平台标识等业务 localStorage 数据
      */
     clear(): void {
-      this.storage.clear()
+      const keysToRemove: string[] = []
+      for (let i = 0; i < this.storage.length; i++) {
+        const key = this.storage.key(i)
+        if (key && key.startsWith(this.getKey('')))
+          keysToRemove.push(key)
+      }
+      keysToRemove.forEach(key => this.storage.removeItem(key))
     }
   }
   return new WebStorage()

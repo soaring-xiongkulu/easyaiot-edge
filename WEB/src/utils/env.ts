@@ -14,7 +14,22 @@ export function getStorageShortName() {
 }
 
 export function getAppEnvConfig() {
-  const ENV = import.meta.env as unknown as GlobEnvConfig
+  const ENV = { ...import.meta.env } as unknown as GlobEnvConfig
+
+  // 生产环境：部署时可挂载运行时 _app.config.js（window.__PRODUCTION__<SHORT_NAME>__CONF__）
+  // 覆盖构建期 VITE_GLOB_* 值，共用镜像按部署形态切换租户/验证码/形态裁剪，无需重建
+  if (isProdMode()) {
+    const confName = `__PRODUCTION__${ENV.VITE_GLOB_APP_SHORT_NAME || '__APP'}__CONF__`.toUpperCase().replace(/\s/g, '')
+    const runtimeConf = (window as unknown as Record<string, Partial<GlobEnvConfig>>)[confName]
+    if (runtimeConf) {
+      Object.keys(runtimeConf).forEach((key) => {
+        const val = runtimeConf[key as keyof GlobEnvConfig]
+        if (val !== undefined && val !== null && val !== '') {
+          (ENV as Record<string, unknown>)[key] = val
+        }
+      })
+    }
+  }
 
   const {
     VITE_GLOB_APP_TITLE,
@@ -25,11 +40,13 @@ export function getAppEnvConfig() {
     VITE_GLOB_UPLOAD_URL,
     VITE_GLOB_APP_TENANT_ENABLE,
     VITE_GLOB_APP_CAPTCHA_ENABLE,
+    VITE_GLOB_DEPLOY_PROFILE,
+    VITE_GLOB_EDGE_STANDALONE,
   } = ENV
 
   if (!/^[a-zA-Z\_]*$/.test(VITE_GLOB_APP_SHORT_NAME)) {
     warn(
-      'VITE_GLOB_APP_SHORT_NAME Variables can only be characters/underscores, please modify in the environment variables and re-running.',
+      'VITE_GLOB_APP_SHORT_NAME Variables can only be characters/underscores, please modify the environment variables and re-running.',
     )
   }
 
@@ -42,6 +59,8 @@ export function getAppEnvConfig() {
     VITE_GLOB_UPLOAD_URL,
     VITE_GLOB_APP_TENANT_ENABLE,
     VITE_GLOB_APP_CAPTCHA_ENABLE,
+    VITE_GLOB_DEPLOY_PROFILE,
+    VITE_GLOB_EDGE_STANDALONE,
   }
 }
 

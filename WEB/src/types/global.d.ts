@@ -80,9 +80,33 @@ declare global {
     VITE_GLOB_APP_SHORT_NAME: string
     VITE_USE_CDN: boolean
     VITE_DROP_CONSOLE: boolean
+    /** 开发时 Vite 是否用轮询监视文件（规避 inotify ENOSPC） */
+    VITE_USE_POLLING: boolean
     VITE_BUILD_COMPRESS: 'gzip' | 'brotli' | 'none'
     VITE_BUILD_COMPRESS_DELETE_ORIGIN_FILE: boolean
     VITE_GENERATE_UI: string
+    /** 天地图 API Key */
+    VITE_TIANDITU_KEY: string
+    /** 部署形态：mini | standard | full */
+    VITE_GLOB_DEPLOY_PROFILE?: string
+    /** edge 单机合装标识（与 mini 前端裁剪区分） */
+    VITE_GLOB_EDGE_STANDALONE?: string
+    /** 数据集批量上传最大并发数 */
+    VITE_UPLOAD_MAX_CONCURRENCY?: string
+    /** VISUALIZE 大屏编辑器基址 */
+    VITE_GLOB_VISUALIZE_URL?: string
+    /** FUXA 组态编辑器基址 */
+    VITE_GLOB_FUXA_URL?: string
+    /** EasyAIoT PANEL 运维控制台（留空则使用当前访问域名 + 9200 端口） */
+    VITE_PANEL_URL?: string
+    /** EasyAIoT IDEA 门户（留空则使用当前访问域名 + 9300 端口） */
+    VITE_IDEA_URL?: string
+    /** IDEA 门户令牌（与 IDEA_TOKEN 一致；浏览器可见，仅作轻量防护） */
+    VITE_IDEA_TOKEN?: string
+    /** EasyAIoT HARNESS AI 助手（留空则使用当前访问域名 + 3080 端口） */
+    VITE_HARNESS_URL?: string
+    VITE_HARNESS_APP_NAME?: string
+    VITE_HARNESS_LOGO?: string
   }
 
   declare function parseInt(s: string | number, radix?: number): number

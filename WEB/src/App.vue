@@ -7,6 +7,7 @@ import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
 import { AppProvider } from '@/components/Application'
 import { useTitle } from '@/hooks/web/useTitle'
+import { usePlatformBranding } from '@/hooks/web/usePlatformBranding'
 import { useLocale } from '@/locales/useLocale'
 import { useAppStore } from '@/store/modules/app'
 
@@ -16,7 +17,8 @@ const appStore = useAppStore()
 const { themeConfig } = storeToRefs(appStore)
 
 const componentSize = computed(() => appStore.getComponentSize)
-// Listening to page changes and dynamically changing site titles
+// 初始化平台标识（登录背景等）并监听页面标题
+usePlatformBranding()
 useTitle()
 </script>
 

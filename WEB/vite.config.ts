@@ -32,6 +32,8 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
 
   const isBuild = command === 'build'
 
+  const proxy = createProxy(VITE_PROXY)
+
   return {
     base: VITE_PUBLIC_PATH,
     root,
@@ -40,16 +42,16 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
       // Listening on all local IPs
       host: true,
       port: VITE_PORT,
-      // Load proxy configuration from .env；告警图库中存的是 /app/alert_images/...，需转到 VIDEO 静态路由
-      proxy: {
-        ...createProxy(VITE_PROXY),
-        '/app/alert_images': {
-          target: 'http://127.0.0.1:6000',
-          changeOrigin: true,
-          rewrite: (path) =>
-            '/video/alert/static' + path.replace(/^\/app\/alert_images/, ''),
-        },
-      },
+      // Load proxy configuration from .env
+      proxy,
+      // Linux 上 IDE/多进程易占满 inotify，触发 ENOSPC；轮询不占用 file watcher 配额
+      watch: isBuild
+        ? undefined
+        : {
+            usePolling: viteEnv.VITE_USE_POLLING !== false,
+            interval: 1000,
+            ignored: ['**/node_modules/**', '**/.git/**', '**/__pycache__/**'],
+          },
     },
     resolve: {
       alias: [

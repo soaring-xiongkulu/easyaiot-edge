@@ -20,8 +20,23 @@ import 'animate.css/animate.min.css'
 import 'vue3-sketch-ruler/lib/style.css'
 import "@/styles/style.css"
 import {setupCustomComponents} from "@/design/component/customComponents"
+import { getAccessToken, syncJwtToken } from '@/utils/auth'
 
 declare module 'vue3-sketch-ruler';
+
+/**
+ * 动态分块(CSS/JS)预加载失败的兜底：多见于「重新部署后」——浏览器仍持有旧的
+ * index.html / 旧 chunk，引用了已被新哈希取代的资源（如 GisMapConsole-*.css）导致 404。
+ * 此时整页刷新一次即可拉到最新 index 与资源；10s 窗口防止资源持续缺失时无限刷新。
+ */
+window.addEventListener('vite:preloadError', () => {
+  const KEY = '__vite_preload_reload_at';
+  const last = Number(sessionStorage.getItem(KEY) || 0);
+  if (Date.now() - last > 10_000) {
+    sessionStorage.setItem(KEY, String(Date.now()));
+    window.location.reload();
+  }
+});
 
 async function bootstrap() {
   const app = createApp(App)
@@ -33,6 +48,11 @@ async function bootstrap() {
   // Initialize internal system configuration
   // 初始化内部系统配置
   initAppConfigStore()
+
+  // 已有登录态时同步 VIDEO 子服务使用的 jwt_token
+  const existingToken = getAccessToken()
+  if (existingToken)
+    syncJwtToken(existingToken)
 
   // Register global components
   // 注册全局组件

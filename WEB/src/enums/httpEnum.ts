@@ -17,6 +17,8 @@ export enum RequestHttpIntervalEnum {
  */
 export enum ResultEnum {
   SUCCESS = 0,
+  /** 部分后端（如 VIDEO）JSON 封套成功码与 HTTP 状态码对齐 */
+  SUCCESS_HTTP_ENVELOPE = 200,
   ERROR = -1,
   TIMEOUT = 400,
   UNAUTHORIZED = 401,

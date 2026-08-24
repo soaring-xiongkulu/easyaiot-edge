@@ -13,11 +13,10 @@ import { useGlobSetting } from '@/hooks/setting'
 import { useMessage } from '@/hooks/web/useMessage'
 import { ContentTypeEnum, RequestEnum, ResultEnum } from '@/enums/httpEnum'
 import {isEmpty, isNull, isString, isUnDef, isUndefined} from '@/utils/is'
-import { getAccessToken, getTenantId } from '@/utils/auth'
+import { getAccessToken, getTenantId, handleSessionTimeout } from '@/utils/auth'
 import { deepMerge, setObjToUrlParams } from '@/utils'
 import { useErrorLogStoreWithOut } from '@/store/modules/errorLog'
 import { useI18n } from '@/hooks/web/useI18n'
-import { useUserStoreWithOut } from '@/store/modules/user'
 import { AxiosRetry } from '@/utils/http/axios/axiosRetry'
 
 const globSetting = useGlobSetting()
@@ -25,97 +24,8 @@ const urlPrefix = globSetting.urlPrefix
 const tenantEnable = globSetting.tenantEnable
 const { createMessage, createErrorModal, createSuccessModal } = useMessage()
 
-// 请求白名单，无须 token、也不做会话预检
-const whiteList: string[] = ['/login', '/refresh-token', '/validate-session', '/captcha/']
-
-/** 独立 axios，避免会话预检走 VAxios 拦截器造成递归 */
-const sessionProbeAxios = axios.create({ timeout: 8000 })
-
-const SESSION_VALIDATE_PATH = '/system/auth/validate-session'
-const SESSION_CHECK_INTERVAL_MS = 30_000
-let lastSessionCheckAt = 0
-let lastSessionCheckedToken: string | undefined
-/** 合并并发预检，避免首屏几十个请求同时打 validate-session */
-let sessionValidateInFlight: Promise<void> | null = null
-/** 防止会话失效时多次 logout + reload 叠在一起 */
-let sessionInvalidLogoutScheduled = false
-
-function buildValidateSessionUrl(): string {
-  const base = (globSetting.apiUrl || '').replace(/\/$/, '')
-  const prefix = (urlPrefix || '').replace(/\/$/, '')
-  return `${base}${prefix}${SESSION_VALIDATE_PATH}`.replace(/([^:]\/)\/+/g, '$1')
-}
-
-function scheduleSessionInvalidLogout(): void {
-  if (sessionInvalidLogoutScheduled)
-    return
-  sessionInvalidLogoutScheduled = true
-  queueMicrotask(() => {
-    useUserStoreWithOut().logout(true)
-  })
-}
-
-async function runSessionProbeOnce(token: string): Promise<void> {
-  const validateUrl = buildValidateSessionUrl()
-  const headers: Recordable = { Authorization: `Bearer ${token}` }
-  if (tenantEnable && tenantEnable === 'true') {
-    const tenantId = getTenantId()
-    if (tenantId != null && tenantId !== '')
-      headers['tenant-id'] = tenantId
-  }
-
-  let res
-  try {
-    res = await sessionProbeAxios.get(validateUrl, {
-      headers,
-      validateStatus: () => true,
-    })
-  }
-  catch {
-    return
-  }
-
-  const body = res.data
-  if (res.status === 401 || body?.code === 401) {
-    scheduleSessionInvalidLogout()
-    throw new axios.Cancel('登录已失效或已在其他端退出')
-  }
-  // 后端成功为 code===0；若代理/HTML 等导致 body 异常，只要 2xx 且非 401 也节流，避免每个请求都打预检导致长时间转圈
-  if (res.status >= 200 && res.status < 300) {
-    if (body == null || typeof body !== 'object' || body.code === 0 || body.code === undefined)
-      lastSessionCheckAt = Date.now()
-  }
-}
-
-async function ensureServerSessionStillValid(
-  configUrl: string | undefined,
-  requestOptions: Recordable | undefined,
-): Promise<void> {
-  if (requestOptions?.withToken === false || requestOptions?.skipSessionValidate)
-    return
-  if (!configUrl || whiteList.some(v => configUrl.includes(v)))
-    return
-
-  const token = getAccessToken()
-  // 无 token 不做预检、不 logout：避免刷新后并发请求在缓存尚未恢复时反复 reload
-  if (!token)
-    return
-
-  const now = Date.now()
-  if (token !== lastSessionCheckedToken) {
-    lastSessionCheckedToken = token
-    lastSessionCheckAt = 0
-  }
-  if (now - lastSessionCheckAt < SESSION_CHECK_INTERVAL_MS)
-    return
-
-  if (!sessionValidateInFlight) {
-    sessionValidateInFlight = runSessionProbeOnce(token).finally(() => {
-      sessionValidateInFlight = null
-    })
-  }
-  await sessionValidateInFlight
-}
+// 请求白名单，无须token的接口
+const whiteList: string[] = ['/login', '/refresh-token']
 
 /**
  * @description: 数据处理，方便区分多种处理方式
@@ -148,8 +58,11 @@ const transform: AxiosTransform = {
     }
     //  这里 code，result，message为 后台统一的字段，需要在 types.ts内修改为项目自己的接口返回格式
     const { code, msg, total } = data;
-    // 这里逻辑可以根据项目进行修改
-    const hasSuccess = data && Reflect.has(data, 'code') && code === ResultEnum.SUCCESS
+    // 默认约定 success 为 0；VIDEO 等子服务统一使用 JSON code:200 表示业务成功，需一并视为成功
+    const hasSuccess =
+      data &&
+      Reflect.has(data, 'code') &&
+      (code === ResultEnum.SUCCESS || code === ResultEnum.SUCCESS_HTTP_ENVELOPE)
     if (hasSuccess) {
       let successMsg = msg;
       if (isNull(successMsg) || isUnDef(successMsg) || isEmpty(successMsg)) {
@@ -184,10 +97,7 @@ const transform: AxiosTransform = {
     switch (code) {
       case ResultEnum.UNAUTHORIZED:
         timeoutMsg = t('sys.api.timeoutMessage')
-        // eslint-disable-next-line no-case-declarations
-        const userStore = useUserStoreWithOut()
-        userStore.setAccessToken(undefined)
-        userStore.logout(true)
+        handleSessionTimeout()
         break
       default:
         if (msg)
@@ -217,7 +127,53 @@ const transform: AxiosTransform = {
 
     const params = config.params || {}
     const data = config.data || false
-    formatDate && data && !isString(data) && formatRequestDate(data)
+    const isFormDataPayload = typeof FormData !== 'undefined' && data instanceof FormData
+    const headers = config.headers as any
+    const getContentType = () => {
+      if (!headers) return undefined
+      if (typeof headers.get === 'function')
+        return headers.get('Content-Type') || headers.get('content-type')
+      return headers['Content-Type'] || headers['content-type']
+    }
+    const setContentType = (value: string) => {
+      if (!headers) return
+      if (typeof headers.set === 'function') {
+        headers.set('Content-Type', value)
+      }
+      else {
+        headers['Content-Type'] = value
+        delete headers['content-type']
+      }
+    }
+    const removeContentType = () => {
+      if (!headers) return
+      if (typeof headers.delete === 'function') {
+        headers.delete('Content-Type')
+        headers.delete('content-type')
+      }
+      else {
+        delete headers['Content-Type']
+        delete headers['content-type']
+      }
+    }
+    const hasExplicitContentType = Boolean(getContentType())
+
+    // FormData 交给浏览器自动设置 multipart boundary，避免被 axios 按 JSON 序列化成 file: {}
+    if (isFormDataPayload) {
+      removeContentType()
+    }
+    // 非 FormData 且未显式指定时，按对象请求体自动补 JSON（支持单请求自行覆盖）
+    else if (
+      !hasExplicitContentType
+      && config.method?.toUpperCase() !== RequestEnum.GET
+      && data
+      && typeof data === 'object'
+      && !Array.isArray(data)
+    ) {
+      setContentType(ContentTypeEnum.JSON)
+    }
+
+    formatDate && data && !isString(data) && !isFormDataPayload && formatRequestDate(data)
     if (config.method?.toUpperCase() === RequestEnum.GET) {
       if (!isString(params)) {
         // 给 get 请求加上时间戳参数，避免从缓存中拿数据。
@@ -283,27 +239,30 @@ const transform: AxiosTransform = {
   /**
    * @description: 请求拦截器处理
    */
-  requestInterceptors: async (config, options) => {
-    const reqOpts = (config as Recordable)?.requestOptions ?? options.requestOptions
-    const skipAttachToken =
-      reqOpts?.withToken === false
-      || whiteList.some(v => (config.url ? config.url.includes(v) : false))
-
+  requestInterceptors: (config, options) => {
+    // 是否需要设置 token
+    let isToken = (config as Recordable)?.requestOptions?.withToken === false
+    isToken = whiteList.some((v) => {
+      if (config.url) {
+        config.url.includes(v)
+        return false
+      }
+      return true
+    })
+    // 请求之前处理config
     const token = getAccessToken()
-    if (token && !skipAttachToken) {
+    if (token && !isToken) {
+      // jwt token
       (config as Recordable).headers.Authorization = options.authenticationScheme
         ? `${options.authenticationScheme} ${token}`
         : token
     }
-
+    // 设置租户
     if (tenantEnable && tenantEnable === 'true') {
       const tenantId = getTenantId()
       if (tenantId)
         (config as Recordable).headers['tenant-id'] = tenantId
     }
-
-    await ensureServerSessionStillValid(config.url, reqOpts)
-
     return config
   },
 
@@ -382,9 +341,9 @@ function createAxios(opt?: Partial<CreateAxiosOptions>) {
         // 基础接口地址
         // baseURL: globSetting.apiUrl,
 
-        headers: { 'Content-Type': ContentTypeEnum.JSON },
-        // 如果是form-data格式
-        // headers: { 'Content-Type': ContentTypeEnum.FORM_URLENCODED },
+        // 默认不写死 Content-Type，由 beforeRequestHook 根据请求体自动推断；
+        // 若单个接口需要指定类型，可在该请求里传 headers 覆盖
+        headers: {},
         // 数据处理方式
         transform: clone(transform),
         // 配置项，下面的选项都可以在独立的接口请求中覆盖

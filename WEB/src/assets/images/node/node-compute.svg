@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" fill="none">
+  <rect x="28" y="72" width="104" height="12" rx="2" fill="#E8F0FF"/>
+  <rect x="32" y="76" width="96" height="4" rx="1" fill="#266CFB" opacity="0.35"/>
+  <rect x="36" y="28" width="88" height="48" rx="4" fill="#F0F5FF" stroke="#266CFB" stroke-width="2"/>
+  <rect x="44" y="36" width="72" height="8" rx="2" fill="#266CFB" opacity="0.15"/>
+  <rect x="44" y="50" width="72" height="8" rx="2" fill="#266CFB" opacity="0.25"/>
+  <rect x="44" y="64" width="72" height="8" rx="2" fill="#266CFB" opacity="0.35"/>
+  <circle cx="52" cy="40" r="2" fill="#52C41A"/>
+  <circle cx="52" cy="54" r="2" fill="#52C41A"/>
+  <circle cx="52" cy="68" r="2" fill="#266CFB"/>
+  <rect x="58" y="38" width="48" height="4" rx="1" fill="#266CFB" opacity="0.5"/>
+  <rect x="58" y="52" width="40" height="4" rx="1" fill="#266CFB" opacity="0.5"/>
+  <rect x="58" y="66" width="44" height="4" rx="1" fill="#266CFB" opacity="0.5"/>
+  <path d="M80 18 L92 24 V36 L80 42 L68 36 V24 Z" fill="#266CFB" opacity="0.9"/>
+  <path d="M80 18 L92 24 V36 L80 42 L68 36 V24 Z" stroke="#1A5AE8" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M80 24 L86 27 V33 L80 36 L74 33 V27 Z" fill="#fff" opacity="0.85"/>
+</svg>

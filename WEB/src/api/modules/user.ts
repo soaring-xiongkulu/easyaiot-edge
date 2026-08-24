@@ -59,16 +59,26 @@ export const messagePreviewUserQuery = (data) => {
 
 // 模版下载
 export const messagePreviewUserExportExcel = () => {
-  return Api.message_preview_user_exportExcel;
+  defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
+  return defHttp.download({ url: Api.message_preview_user_exportExcel }, '目标用户导入模板.xlsx');
 };
 
 // 导入用户
 export const messagePreviewUserImport = (data) => {
-  return commonApi(
-    'post',
-    Api.message_preview_user_import,
-    { data },
-    { 'Content-Type': 'multipart/form-data' },
+  defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
+  return defHttp.post(
+    {
+      url: Api.message_preview_user_import,
+      data,
+      headers: {
+        // @ts-ignore
+        ignoreCancelToken: true,
+      },
+    },
+    {
+      isTransformResponse: true,
+      errorMessageMode: 'none',
+    },
   );
 };
 

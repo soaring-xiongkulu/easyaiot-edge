@@ -26,8 +26,6 @@ export interface RequestOptions {
   ignoreCancelToken?: boolean
   // Whether to send token in header
   withToken?: boolean
-  /** 跳过「会话是否在 Redis 仍有效」的预检（避免 validate-session 递归等） */
-  skipSessionValidate?: boolean
   // 请求重试机制
   retryRequest?: RetryRequest
 }

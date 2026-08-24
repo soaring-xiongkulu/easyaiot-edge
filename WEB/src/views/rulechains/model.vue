@@ -1,6 +1,23 @@
 <template>
-  <BasicModal v-bind="$attrs" @register="register" @ok="handleSubmit">
-    <div class="pt-3px pr-3px">
+  <BasicDrawer
+    v-bind="$attrs"
+    @register="register"
+    :title="drawerTitle"
+    width="1400"
+    placement="right"
+    :showFooter="true"
+    :showCancelBtn="false"
+    :showOkBtn="false"
+    destroy-on-close
+  >
+    <template #footer>
+      <div class="footer-buttons">
+        <Button @click="handleCancel">取消</Button>
+        <Button type="primary" @click="handleSubmit">保存</Button>
+      </div>
+    </template>
+
+    <div class="rulechain-drawer-content">
       <template v-if="tplType === 'add' || tplType === 'edit'">
         <BasicForm @register="registerForm" :model="model" />
       </template>
@@ -20,16 +37,18 @@
         </UploadDragger>
       </template>
     </div>
-  </BasicModal>
+  </BasicDrawer>
 </template>
 <script lang="ts">
   import { defineComponent, ref } from 'vue';
-  import { BasicModal, useModalInner } from '@/components/Modal';
+  import { BasicDrawer, useDrawerInner } from '@/components/Drawer';
   import { BasicForm, FormSchema, useForm } from '@/components/Form';
   import { updateflows, addFlows, getFlows } from '@/api/device/rule-chains';
   import { useMessage } from '@/hooks/web/useMessage';
   import { Upload } from 'ant-design-vue';
   import { CloudUploadOutlined } from '@ant-design/icons-vue';
+  import { Button } from '@/components/Button';
+  import { isNodeRedDemoFlow } from '@/utils/noderedDemo';
 
   const schemas: FormSchema[] = [
     {
@@ -66,7 +85,7 @@
   ];
   const UploadDragger = Upload.Dragger;
   export default defineComponent({
-    components: { BasicModal, BasicForm, UploadDragger, CloudUploadOutlined },
+    components: { BasicDrawer, BasicForm, UploadDragger, CloudUploadOutlined, Button },
     props: {
       userData: { type: Object },
     },
@@ -74,17 +93,16 @@
       const modelRef = ref({});
       const { createMessage } = useMessage();
       const tplType = ref<string>('add');
-      // let fileData;
+      const drawerTitle = ref('添加规则');
       const [
         registerForm,
         {
           validateFields,
           resetFields,
           setFieldsValue,
-          // setProps
         },
       ] = useForm({
-        labelWidth: 70,
+        labelWidth: 150,
         schemas,
         showActionButtonGroup: false,
         actionColOptions: {
@@ -95,7 +113,7 @@
       const detail = ref({});
       const flowsId = ref('');
 
-      const [register, { closeModal, setModalProps }] = useModalInner((data) => {
+      const [register, { closeDrawer, setDrawerProps }] = useDrawerInner((data) => {
         detail.value = {};
         data && onDataReceive(data);
       });
@@ -106,6 +124,7 @@
         resetFields();
         tplType.value = info;
         const ModalTitle = tplType.value === 'add' ? '添加规则' : isEdit ? '编辑规则' : '导入规则';
+        drawerTitle.value = ModalTitle;
         if (isEdit && data && data.id) {
           flowsId.value = data.id;
           getFlows(data.id).then((res) => {
@@ -117,7 +136,11 @@
             ...data,
           });
         }
-        setModalProps({ title: ModalTitle, okButtonProps: { disabled: false } });
+        setDrawerProps({ title: ModalTitle });
+      }
+
+      function handleCancel() {
+        closeDrawer();
       }
 
       async function handleSubmit() {
@@ -134,25 +157,21 @@
                 createMessage.error('规则链ID无效！');
                 return;
               }
+              if (isNodeRedDemoFlow({ id: flowsId.value, label: (params as any)?.label })) {
+                createMessage.warning('EasyAIoT 演示规则链为只读，禁止修改');
+                return;
+              }
               await updateflows(flowsId.value, params);
             }
-            // const result = await updateflows(flowsId.value, params);
-            // const ruleChainId = result.id;
-            // if (tplType.value === 'import') {
-            //   await postRuleChainMetadata({
-            //     ...metadata,
-            //     ruleChainId,
-            //   });
-            // }
             createMessage.success('操作成功！');
-            closeModal();
+            closeDrawer();
             emit('success', {});
-          }catch (error) {
-    console.error(error)
-            createMessage.error('操作失败！');
+          } catch (error: any) {
+            console.error(error);
+            createMessage.error(error?.message || '操作失败！');
           }
         }catch (error) {
-    console.error(error)
+          console.error(error)
           console.log('not passing', error);
         }
       }
@@ -180,15 +199,11 @@
           reader.onload = (evt) => {
             try {
               console.log(evt);
-              // this.form.file = JSON.parse(evt.target.result)
-              // let result: any = evt?.target?.result ?? '';
-              // fileData = JSON.parse(result);
               data.onSuccess();
             }catch (error) {
-    console.error(error)
+              console.error(error)
               createMessage.error(String(error));
               data.onError();
-              // this.$refs.upload.clearFiles()
             }
           };
           reader.readAsText(data.file);
@@ -203,12 +218,25 @@
         handleUploadChange,
         handleChange,
         handleSubmit,
+        handleCancel,
         register,
         schemas,
         registerForm,
         model: modelRef,
         tplType,
+        drawerTitle,
       };
     },
   });
 </script>
+<style lang="less" scoped>
+.rulechain-drawer-content {
+  padding: 8px 16px 0;
+}
+
+.footer-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+</style>

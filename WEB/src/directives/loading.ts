@@ -25,7 +25,7 @@ const loadingDirective: Directive = {
       return
     instance.setTip(el.getAttribute('loading-tip'))
     if (binding.oldValue !== binding.value)
-      instance.setLoading?.(binding.value && !instance.loading)
+      instance.setLoading?.(!!binding.value)
   },
   unmounted(el) {
     el?.instance?.close()

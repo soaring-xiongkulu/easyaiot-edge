@@ -15,8 +15,7 @@ import type { RequestOptions, Result, UploadFileParams } from '@/types/axios'
 import { ContentTypeEnum, RequestEnum } from '@/enums/httpEnum'
 import { downloadByData } from '@/utils/file/download'
 import { useGlobSetting } from '@/hooks/setting'
-import { getRefreshToken, getTenantId, setAccessToken } from '@/utils/auth'
-import { useUserStoreWithOut } from '@/store/modules/user'
+import { getRefreshToken, getTenantId, setAccessToken, handleSessionTimeout } from '@/utils/auth'
 
 export * from './axiosTransform'
 
@@ -102,7 +101,7 @@ export class VAxios {
 
     const axiosCanceler = new AxiosCanceler()
 
-    // 请求拦截器配置处理（支持同步或异步拦截器，便于会话预检）
+    // 请求拦截器配置处理
     this.axiosInstance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
       // If cancel repeat request is turned on, then cancel repeat request is prohibited
       const requestOptions
@@ -112,7 +111,7 @@ export class VAxios {
       !ignoreCancelToken && axiosCanceler.addPending(config)
 
       if (requestInterceptors && isFunction(requestInterceptors))
-        return Promise.resolve(requestInterceptors(config, this.options))
+        config = requestInterceptors(config, this.options)
 
       return config
     }, undefined)
@@ -125,48 +124,55 @@ export class VAxios {
     // 响应结果拦截器处理
     this.axiosInstance.interceptors.response.use(async (res: AxiosResponse<any>) => {
       const config = res.config
-      if (res.data.code === 401) {
+      const isUnauthorized = res.status === 401 || res.data?.code === 401
+      if (isUnauthorized) {
         // 如果未认证，并且未进行刷新令牌，说明可能是访问令牌过期了
         if (!isRefreshToken) {
           isRefreshToken = true
-          const rt = getRefreshToken()
-          if (rt) {
+          // 1. 获取到刷新token
+          if (getRefreshToken()) {
+            // 2. 进行刷新访问令牌
             try {
               const refreshTokenRes = await this.refreshToken()
-              const newAccess = refreshTokenRes?.data?.data?.accessToken
-              if (!newAccess)
-                throw new Error('refresh token response missing accessToken')
-              setAccessToken(newAccess)
-              ;(config as Recordable).headers.Authorization = `Bearer ${newAccess}`
-              isRefreshToken = false
-              const queued = requestList
-              requestList = []
-              queued.forEach((cb: any) => {
-                cb()
+              // 2.1 刷新成功，则回放队列的请求 + 当前请求
+              const newAccessToken = refreshTokenRes.data.data.accessToken
+              setAccessToken(newAccessToken)
+              ;(config as Recordable).headers.Authorization = `Bearer ${newAccessToken}`
+              requestList.forEach((cb: any) => {
+                cb(newAccessToken)
               })
-              return this.axiosInstance(config)
+              requestList = []
+              return new Promise((resolve) => {
+                resolve(this.axiosInstance(config))
+              })
             }
             catch (e) {
-              isRefreshToken = false
-              requestList = []
-              useUserStoreWithOut().logout(true)
+              requestList.forEach((cb: any) => {
+                cb()
+              })
+              handleSessionTimeout()
               return Promise.reject(e)
+            }
+            finally {
+              requestList = []
+              isRefreshToken = false
             }
           }
           else {
             isRefreshToken = false
-            useUserStoreWithOut().logout(true)
-            return Promise.reject(new Error('Unauthorized'))
+            handleSessionTimeout()
+            return Promise.reject(new Error('登录已过期，请重新登录'))
           }
         }
         else {
           // 添加到队列，等待刷新获取到新的令牌
-          return new Promise((resolve) => {
-            requestList.push(() => {
-              const access = useUserStoreWithOut().getAccessToken
-              ;(config as Recordable).headers.Authorization = access
-                ? `Bearer ${access}`
-                : (config as Recordable).headers.Authorization
+          return new Promise((resolve, reject) => {
+            requestList.push((newAccessToken?: string) => {
+              if (!newAccessToken) {
+                reject(new Error('登录已过期，请重新登录'))
+                return
+              }
+              ;(config as Recordable).headers.Authorization = `Bearer ${newAccessToken}`
               resolve(this.axiosInstance(config))
             })
           })
@@ -280,6 +286,10 @@ export class VAxios {
 
     conf = this.supportFormData(conf)
 
+    // 确保 per-request timeout 不会被 cloneDeep / beforeRequestHook / supportFormData 意外丢失
+    if (config.timeout != null)
+      conf.timeout = config.timeout
+
     return new Promise((resolve, reject) => {
       this.axiosInstance
         .request<any, AxiosResponse<Result>>(conf)
@@ -323,6 +333,10 @@ export class VAxios {
 
     conf = this.supportFormData(conf)
 
+    // 确保 per-request timeout 不会被 cloneDeep / beforeRequestHook / supportFormData 意外丢失
+    if (config.timeout != null)
+      conf.timeout = config.timeout
+
     return new Promise((resolve, reject) => {
       this.axiosInstance
         .request<any, AxiosResponse<Result>>(conf)
@@ -347,6 +361,23 @@ export class VAxios {
 
   request<T = any>(config: AxiosRequestConfig, options?: RequestOptions): Promise<T> {
     let conf: CreateAxiosOptions = cloneDeep(config)
+    const confAny = conf as any
+    // lodash 深拷贝会破坏 FormData，导致文件字段退化为普通对象（后端收到 file: {}）
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData)
+      confAny.data = config.data
+    // 双保险：FormData 请求必须移除 Content-Type，让浏览器自动带 boundary
+    if (typeof FormData !== 'undefined' && confAny.data instanceof FormData && confAny.headers) {
+      const headers = confAny.headers as any
+      if (typeof headers.delete === 'function') {
+        headers.delete('Content-Type')
+        headers.delete('content-type')
+      }
+      else {
+        delete headers['Content-Type']
+        delete headers['content-type']
+      }
+    }
+
     // cancelToken 如果被深拷贝，会导致最外层无法使用cancel方法来取消请求
     if (config.cancelToken)
       conf.cancelToken = config.cancelToken
@@ -367,6 +398,10 @@ export class VAxios {
     conf.requestOptions = opt
 
     conf = this.supportFormData(conf)
+
+    // 确保 per-request timeout 不会被 cloneDeep / beforeRequestHook / supportFormData 意外丢失
+    if (config.timeout != null)
+      conf.timeout = config.timeout
 
     return new Promise((resolve, reject) => {
       this.axiosInstance

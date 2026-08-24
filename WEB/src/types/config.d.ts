@@ -34,6 +34,7 @@ export interface MenuSetting {
   collapsedShowTitle: boolean
   mixSideTrigger: MixSidebarTriggerEnum
   mixSideFixed: boolean
+  mixSidebarDensity: 'compact' | 'standard' | 'comfortable'
 }
 
 export interface MultiTabsSetting {
@@ -150,6 +151,8 @@ export interface ProjectConfig {
   removeAllHttpPending: boolean
 }
 
+export type DeployProfile = 'mini' | 'standard' | 'full'
+
 export interface GlobConfig {
   // Site title
   title: string
@@ -165,7 +168,10 @@ export interface GlobConfig {
   tenantEnable: string
   // 验证码开关
   captchaEnable: string
+  // 部署形态
+  deployProfile?: DeployProfile
 }
+
 export interface GlobEnvConfig {
   // Site title
   VITE_GLOB_APP_TITLE: string
@@ -182,4 +188,10 @@ export interface GlobEnvConfig {
   VITE_GLOB_APP_TENANT_ENABLE: string
   // 验证码开关
   VITE_GLOB_APP_CAPTCHA_ENABLE: string
+  // 部署形态：mini | standard | full
+  VITE_GLOB_DEPLOY_PROFILE?: string
+  // edge 单机合装开关
+  VITE_GLOB_EDGE_STANDALONE?: string
+  // 部署形态
+  VITE_GLOB_DEPLOY_PROFILE?: string
 }

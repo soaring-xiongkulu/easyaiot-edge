@@ -36,6 +36,18 @@ function getToTarget(tabItem: RouteLocationNormalized) {
 
 const cacheTab = projectSetting.multiTabsSetting.cache
 
+/** 多标签去重：同一路由仅 query 不同时复用已有标签（如 /camera/index 与 /camera/index?tab=1） */
+function isSameTabRoute(
+  tab: RouteLocationNormalized,
+  path: string,
+  fullPath: string,
+  name?: string | symbol | null,
+) {
+  if ((tab.fullPath || tab.path) === (fullPath || path))
+    return true
+  return Boolean(name && tab.path === path && tab.name === name)
+}
+
 export const useMultipleTabStore = defineStore('app-multiple-tab', {
   state: (): MultipleTabState => ({
     // Tabs that need to be cached
@@ -130,7 +142,7 @@ export const useMultipleTabStore = defineStore('app-multiple-tab', {
       // Existing pages, do not add tabs repeatedly
       const tabHasExits = this.tabList.some((tab, index) => {
         updateIndex = index
-        return (tab.fullPath || tab.path) === (fullPath || path)
+        return isSameTabRoute(tab, path, fullPath, name)
       })
 
       // If the tab already exists, perform the update operation
@@ -215,7 +227,9 @@ export const useMultipleTabStore = defineStore('app-multiple-tab', {
 
     // Close according to key
     async closeTabByKey(key: string, router: Router) {
-      const index = this.tabList.findIndex(item => (item.fullPath || item.path) === key)
+      const index = this.tabList.findIndex(
+        item => (item.fullPath || item.path) === key || item.path === key,
+      )
       if (index !== -1) {
         await this.closeTab(this.tabList[index], router)
         const { currentRoute, replace } = router
