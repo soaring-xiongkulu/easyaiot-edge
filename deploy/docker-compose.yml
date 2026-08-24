@@ -1,0 +1,109 @@
+# EasyAIoT-Edge 纯边缘形态（standalone）中间件编排
+# 仅保留 PostgreSQL 18 / Redis 7.4.8 / SRS 5 三个服务（+ PG 权限初始化一次性容器）。
+# 自 .scripts/docker/docker-compose.yml (ec6b3d70) 抽取，路径已改为相对 deploy/ 目录。
+# 用法：cd deploy && docker compose up -d   （由根目录 install.sh 调用）
+services:
+  # PostgreSQL 初始化容器：启动前修复数据目录权限（仅设顶层，保留 pgdata 0700）
+  PostgresSQL-init:
+    image: postgres:18
+    container_name: postgres-init
+    user: "0:0"
+    volumes:
+      - ./db_data/data:/var/lib/postgresql/data:rw
+      - ./db_data/log:/var/log/postgresql:rw
+    command:
+      [
+        "/bin/bash",
+        "-c",
+        "mkdir -p /var/lib/postgresql/data /var/log/postgresql && chown -R 999:999 /var/lib/postgresql/data /var/log/postgresql && chmod 777 /var/lib/postgresql/data && chmod 777 /var/log/postgresql && echo '[PostgreSQL Init] 权限设置完成'",
+      ]
+    restart: "no"
+
+  # PostgreSQL：仅 iot-video20 一个库（由 init-databases.sh 按 *10.sql → *20 规约自动发现）
+  PostgresSQL:
+    image: postgres:18
+    container_name: postgres-server
+    restart: always
+    depends_on:
+      PostgresSQL-init:
+        condition: service_completed_successfully
+    ports:
+      - "0.0.0.0:5432:5432"
+    environment:
+      - TZ=Asia/Shanghai
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-iot45722414822}
+      - POSTGRES_DB=postgres
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - ./db_data/data:/var/lib/postgresql/data:rw
+      - ./db_data/log:/var/log/postgresql:rw
+      # 种子 SQL（当前仅 postgresql/iot-video10.sql）
+      - ./postgresql:/docker-entrypoint-initdb.d:rw
+      # 00- 前缀确保在 SQL 文件之前执行
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/00-init-databases.sh:rw
+      - ./postgresql-entrypoint.sh:/postgresql-entrypoint.sh:ro
+    user: "0:0"
+    entrypoint: ["/bin/bash", "/postgresql-entrypoint.sh"]
+    # 最大连接数 10240（与原工程一致）
+    command: ["postgres", "-c", "max_connections=10240"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Redis：AOF 持久化
+  Redis:
+    image: redis:7.4.8
+    container_name: redis-server
+    restart: always
+    ports:
+      - "0.0.0.0:6379:6379"
+    environment:
+      - TZ=Asia/Shanghai
+    command: >
+      redis-server
+      --save 60 1000
+      --loglevel warning
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-basiclab@iot975248395}
+      --maxclients 10000
+      --timeout 300
+      --tcp-keepalive 60
+      --tcp-backlog 511
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - "./redis_data/data:/data:rw"
+      - "./redis_data/logs:/logs:rw"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-basiclab@iot975248395} ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # SRS：host 网络（1985 API / 8080 HTTP-FLV / 1935 RTMP），媒体根挂载为 /data
+  SRS:
+    image: ossrs/srs:5
+    container_name: srs-server
+    restart: always
+    network_mode: host
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - "./srs_data/conf:/usr/local/srs/conf:rw"
+      - "./srs_data/conf:/opt/srs/trunk/conf:rw"
+      - "${EASYAIOT_MEDIA_ROOT:-/mnt/easyaiot-media}:/data:rw"
+      - "./srs-entrypoint.sh:/usr/local/bin/srs-entrypoint.sh:ro"
+      - "./srs-healthcheck.sh:/usr/local/bin/srs-healthcheck.sh:ro"
+    entrypoint: ["/bin/bash", "/usr/local/bin/srs-entrypoint.sh"]
+    command: ["./objs/srs", "-c", "conf/docker.conf"]
+    working_dir: /usr/local/srs
+    healthcheck:
+      test: ["CMD", "/bin/bash", "/usr/local/bin/srs-healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
