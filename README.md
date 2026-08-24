@@ -6,7 +6,7 @@
 ### One platform, covering mainstream edge computing power – switch the chip, not the business
 
 <p style="font-size: 16px; line-height: 1.8; color: #555; font-weight: 400; margin: 20px 0;">
-  EasyAIoT Edge is a fully open-source Heterogeneous Edge Computing Platform. Under a unified set of operation habits, data links, and O&M systems, <strong>it simultaneously supports heterogeneous edge computing power such as Huawei Ascend, NVIDIA Jetson, Rockchip RK3588, Sophon BM1688, and Hygon/Intel/AMD x86</strong>. The platform covers the full chain of camera access, algorithm task orchestration, inference, alarming, recording, IoT acquisition, and rule engine. It adopts the MIT license, with no risk of vendor lock-in.
+  EasyAIoT Edge is a fully open-source Heterogeneous Edge Computing Platform. Under a unified set of operation habits, data links, and O&M systems, <strong>it simultaneously supports heterogeneous edge computing power such as Huawei Ascend, NVIDIA Jetson, Rockchip RK3588, Sophon BM1688, and Hygon/Intel/AMD x86</strong>. The platform covers the full chain of camera access, algorithm task orchestration, inference, alarming, and recording. It adopts the MIT license, with no risk of vendor lock-in.
 </p>
 
 <div align="center">
@@ -19,12 +19,20 @@
   <a href="./README_zh.md">简体中文</a>
 </h4>
 
+## 🚀 Quick Start
+
+```bash
+./install.sh install          # middleware (PG/Redis/SRS) → RUNTIME (C++) → VIDEO → WEB → verify
+```
+
+Entry: `https://<host>:8888`, default account `admin / admin123` (no tenant, no captcha). Manage with `./install.sh status|logs|stop|start|restart|verify|clean`.
+
 ## 💎 Why It's Worth Your Attention
 
 | Your Concern | Explanation |
 |--------------|-------------|
 | **Less redundant work** | The field may involve Xinchuang Ascend, industrial Jetson, cost-effective RK3588, high-compute BM1688, or server-room x86. The business logic and interface are unified – no need to build a separate backend and O&M manual for each board. |
-| **Reduced learning and integration cost** | O&M and integration teams only need to get familiar with one set of modules (WEB / DEVICE / VIDEO / AI / TASK) and one port topology. Changing hardware mainly means swapping inference images and parameters, not rebuilding the system from scratch. |
+| **Reduced learning and integration cost** | O&M and integration teams only need to get familiar with one set of modules (WEB / VIDEO / RUNTIME) and one port topology. Changing hardware mainly means swapping inference images and parameters, not rebuilding the system from scratch. |
 | **Edge can self-close the loop** | Local alarming and recording are possible even in weak or private networks. The core link can run with approximately <strong>4GB</strong> of memory, making it suitable for boxes, all-in-one machines, and small servers. |
 | **Compliance and business friendly** | MIT license – individuals and enterprises can freely use and customize without anxiety about vendor lock-in. |
 
@@ -32,13 +40,13 @@
 
 The biggest pain point in edge deployment is often not "no model", but **changing a board requires changing a whole system**: domestication requires Ascend and Hygon x86, Jetson is common on production lines, RK3588 is used for low-cost solutions, and BM1688 is typical for heavy-inference boxes – each with different SDKs, containers, and inference entry points. The same security or quality inspection business is forced to maintain multiple technical lines, consuming manpower and time on repetitive integration.
 
-**EasyAIoT Edge** uses fixed five modules – **WEB / DEVICE / VIDEO / AI / TASK** – along with **fixed ports + environment variables + host network** to separate the "daily-use platform" from the "chip-bound inference part": the interface, alarming, recording, thing model, and rule engine remain unchanged; switching among Ascend, Jetson, RK, BM1688, or x86 mainly involves changing the inference image, orchestration parameters, and the build target of TASK (C++), aligning with common routes like CANN, CUDA/TensorRT, RK NPU, TPU, and x86 CPU/GPU, thereby using **a single open-source platform** to string together Xinchuang, industrial control, ARM boxes, and x86 servers.
+**EasyAIoT Edge** uses fixed three modules – **WEB / VIDEO / RUNTIME** – along with **fixed ports + environment variables + host network** to separate the "daily-use platform" from the "chip-bound inference part": the interface, alarming, and recording remain unchanged; switching among Ascend, Jetson, RK, BM1688, or x86 mainly involves changing the inference image, orchestration parameters, and the build target of RUNTIME (C++), aligning with common routes like CANN, CUDA/TensorRT, RK NPU, TPU, and x86 CPU/GPU, thereby using **a single open-source platform** to string together Xinchuang, industrial control, ARM boxes, and x86 servers.
 
 ## 🧩 Supported Chips and Typical Usage
 
 | Chip / Platform | Typical Hardware / Scenario | Role in This Platform |
 |-----------------|-----------------------------|-----------------------|
-| **Huawei Ascend** | Atlas edge inference cards, Ascend NPU all-in-one machines, etc. | Xinchuang and domestic inference stack; closed-loop business together with DEVICE / alarming / recording |
+| **Huawei Ascend** | Atlas edge inference cards, Ascend NPU all-in-one machines, etc. | Xinchuang and domestic inference stack; closed-loop business together with VIDEO / alarming / recording |
 | **NVIDIA Jetson** | Orin / Xavier / Nano, etc. | Industrial vision, low-latency CUDA ecosystem; supports containerized GPU / NVIDIA toolchain integration |
 | **Rockchip RK3588** | ARM edge all-in-one machines, NVR form factor | High-efficiency ARM + NPU; suitable for multi-channel video and lightweight inference combinations |
 | **Sophon BM1688** | Sophon edge computing box, 1688 series SoC | High-compute INT8/TPU route; suitable for heavy inference or model service clusters |
@@ -70,9 +78,9 @@ The platform continues the cloud-edge-device integration concept of the main pro
 We adhere to a **Python + C++** multi-language hybrid architecture, leveraging the strengths of each:
 
 - **Python**: Streaming media processing, AI algorithm orchestration, model services
-- **C++**: High-performance inference hot path (TASK), low latency, low memory footprint; under the same scheduling logic, inference acceleration can be tailored for different chips
+- **C++**: High-performance inference hot path (RUNTIME), low latency, low memory footprint; under the same scheduling logic, inference acceleration can be tailored for different chips
 
-In edge scenarios, modules connect directly through **environment variables + fixed ports + host network**, without relying on centralized registration discovery, reducing O&M costs; **switch the chip, not the business** – the management end and DEVICE/VIDEO protocol layer remain stable, the inference layer switches based on chip.
+In edge scenarios, modules connect directly through **environment variables + fixed ports + host network**, without relying on centralized registration discovery, reducing O&M costs; **switch the chip, not the business** – the management end and VIDEO protocol layer remain stable, the inference layer switches based on chip.
 
 ## 🔗 Relationship with the Main Project EasyAIoT
 
@@ -83,23 +91,21 @@ In edge scenarios, modules connect directly through **environment variables + fi
 | **Deployment topology** | Single machine or a few nodes, middleware and business directly connected, no multi-tenancy |
 | **Service discovery** | Fixed ports + environment variables, **does not rely on** centralized registry |
 | **Network** | Video service defaults to `network_mode: host`, convenient for communication with cameras/LAN |
-| **Database** | Default database names `ruoyi-vue-pro20` / `iot-edge-video20` / `iot-edge-ai20` |
-| **Computing power** | **Ascend / Jetson / RK3588 / BM1688 / x86** etc.: TASK (C++) + AI containers orchestrated per target chip; can reference official container solutions like NVIDIA Container Toolkit |
+| **Database** | Default database name `iot-video20` |
+| **Computing power** | **Ascend / Jetson / RK3588 / BM1688 / x86** etc.: RUNTIME (C++) orchestrated per target chip; can reference official container solutions like NVIDIA Container Toolkit |
 | **Edge-cloud synergy** | Can connect to the cloud main project to achieve strategy/model/alarm synchronization, or run completely offline |
 
 > If you need centralized O&M for thousands of channels or multi-tenant operation dashboards, please use the main project's cloud deployment solution.
 
 ## 🧩 Project Structure
 
-EasyAIoT Edge consists of five core modules, which can be deployed independently:
+EasyAIoT Edge consists of three core modules, which can be deployed independently:
 
 | Module | Description |
 |--------|-------------|
 | **WEB** | Vue 3 + Vite management frontend: cameras, algorithm tasks, models, alarms, permissions, etc. |
-| **DEVICE** | IoT device/product/thing model/rule engine backend (JDK 21) |
-| **VIDEO** | Video and algorithm task Python service (including frame extractor, sorter, streaming, etc.) |
-| **AI** | Training, inference, model services (YOLO/LLM/OCR/speech, etc.) |
-| **TASK** | C++ high-performance edge inference module |
+| **VIDEO** | Video and algorithm task Python service: device access (ONVIF/GB28181), SRS stream forwarding, algorithm task lifecycle management, alarming, and recording |
+| **RUNTIME** | C++ high-performance edge inference runtime: pull stream → decode → AI inference; publishes alarms via MQTT and reports heartbeat back to VIDEO; supports realtime / snap / patrol task types |
 
 ## 🏗️ Architecture and Data Flow
 
@@ -107,11 +113,10 @@ EasyAIoT Edge consists of five core modules, which can be deployed independently
 
 Brief data flow:
 1. Cameras connect to the VIDEO module via ONVIF/GB28181
-2. VIDEO extracts video frames based on algorithm task configuration and distributes them to the AI module or TASK module
-3. AI/TASK performs inference and returns the results to VIDEO
-4. VIDEO triggers alarms based on arming rules and writes to the DEVICE module's rule engine
-5. DEVICE sends alarms through notification channels and triggers recording storage
-6. The WEB frontend uniformly displays device status, alarm events, and recording playback
+2. VIDEO forwards the original stream through SRS for live preview; based on algorithm task configuration, it generates the task config and launches the RUNTIME binary
+3. RUNTIME pulls the stream, decodes, and runs AI inference, publishes alarms over MQTT, and reports heartbeats back to VIDEO over HTTP
+4. VIDEO triggers alarms based on arming rules, persists events, and triggers recording storage
+5. The WEB frontend uniformly displays device status, alarm events, and recording playback
 
 ## 🖥️ Localization and Operating Systems
 
@@ -270,14 +275,3 @@ Soaring Xiongkulu/easyaiot-edge is open-sourced under the <a href="https://gitee
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
 <strong>Usage Permission</strong>: Individuals and enterprises can use it 100% free of charge, without needing to retain author or Copyright information. We believe that the value of technology lies in being widely used and continuously innovated, rather than being bound by copyright. We hope you can freely use, modify, and distribute this project, so that AI technology truly benefits everyone.
 </p>
----
-
-## 🚀 Pure-Edge (standalone) One-Command Deployment
-
-This repository now ships the **pure-edge standalone form** extracted from the full platform (VIDEO + RUNTIME + WEB only, no cloud/Java/DEVICE services; middleware trimmed to PostgreSQL + Redis + SRS). See [EDGE_STANDALONE_MIGRATION.md](./EDGE_STANDALONE_MIGRATION.md) for scope.
-
-```bash
-./install.sh install          # middleware → RUNTIME → VIDEO → WEB → verify
-```
-
-Entry: `https://<host>:8888`, default account `admin / admin123` (no tenant, no captcha). Manage with `./install.sh status|logs|stop|start|restart|verify`.
