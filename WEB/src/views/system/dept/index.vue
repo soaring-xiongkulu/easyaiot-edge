@@ -10,7 +10,7 @@ import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, TableAction, useTable } from '@/components/Table'
 import { getListSimpleUsers } from '@/api/system/user'
 import { deleteDept, getDeptPage } from '@/api/system/dept'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemDept' })
 
 const { t } = useI18n()
@@ -86,15 +86,15 @@ onMounted(async () => {
   <div>
     <BasicTable @register="register" @fetch-success="onFetchSuccess">
       <template #toolbar>
-        <a-button v-auth="['system:dept:create']" type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+        <Button v-auth="['system:dept:create']" type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
           {{ t('action.create') }}
-        </a-button>
-        <a-button @click="expandAll">
+        </Button>
+        <Button @click="expandAll">
           {{ t('component.tree.expandAll') }}
-        </a-button>
-        <a-button @click="collapseAll">
+        </Button>
+        <Button @click="collapseAll">
           {{ t('component.tree.unExpandAll') }}
-        </a-button>
+        </Button>
       </template>
       <template #leader="{ text }">
         <span> {{ userNicknameFormat(text) }} </span>

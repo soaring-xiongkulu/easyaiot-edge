@@ -64,7 +64,7 @@
               :disabled="state.isView"
               @change="handleFileUpload"
             >
-              <a-button type="primary">点击上传</a-button>
+              <Button type="primary">点击上传</Button>
             </Upload>
             <div v-if="modelRef.input_source" style="margin-top: 8px">
               已上传文件: {{ fileName }}
@@ -85,7 +85,7 @@ import {useMessage} from '@/hooks/web/useMessage';
 import {createInferenceTask, getModelPage, updateInferenceTask} from "@/api/device/model";
 import {useUserStoreWithOut} from "@/store/modules/user";
 import {useGlobSetting} from "@/hooks/setting";
-
+import { Button } from '@/components/Button'
 // 定义类型
 interface InferenceModel {
   id?: number | null;

@@ -9,7 +9,7 @@ import { getMyNotifyMessagePage, updateAllNotifyMessageRead, updateNotifyMessage
 import MessageInfoModal from '@/views/system/notify/components/MessageInfoModal.vue'
 import { useModal } from '@/components/Modal'
 import { useUserMessageStore } from '@/store/modules/userMessage'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemMyMessage' })
 
 const { t } = useI18n()
@@ -88,12 +88,12 @@ function handleInfo(record: any) {
   <div>
     <BasicTable bordered @register="registerTable">
       <template #toolbar>
-        <a-button pre-icon="solar:check-read-line-duotone" type="primary" :disabled="readedDisabled" @click="handleUpdateList">
+        <Button preIcon="solar:check-read-line-duotone" type="primary" :disabled="readedDisabled" @click="handleUpdateList">
           标记已读
-        </a-button>
-        <a-button pre-icon="solar:check-read-linear" type="primary" @click="handleUpdateAll">
+        </Button>
+        <Button preIcon="solar:check-read-linear" type="primary" @click="handleUpdateAll">
           全部已读
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">

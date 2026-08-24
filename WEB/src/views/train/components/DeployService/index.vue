@@ -6,13 +6,13 @@
       class="rounded-xl overflow-hidden border border-gray-100 shadow-sm"
     >
       <template #toolbar>
-        <a-button type="primary" @click="openDeployModal(true, {isEdit: false, isView: false})">
+        <Button type="primary" @click="openDeployModal(true, {isEdit: false, isView: false})">
           <Icon icon="ant-design:plus-circle-outlined"/>
           模型部署
-        </a-button>
-        <a-button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
+        </Button>
+        <Button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
           切换视图
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.dataIndex === 'status'">
@@ -85,13 +85,13 @@
         @view-replicas="handleViewReplicas"
       >
         <template #header>
-          <a-button type="primary" @click="openDeployModal(true, {isEdit: false, isView: false})">
+          <Button type="primary" @click="openDeployModal(true, {isEdit: false, isView: false})">
             <Icon icon="ant-design:plus-circle-outlined"/>
             部署新服务
-          </a-button>
-          <a-button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
+          </Button>
+          <Button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
             切换视图
-          </a-button>
+          </Button>
         </template>
       </DeployServiceCardList>
     </div>
@@ -134,8 +134,7 @@ import ReplicasDrawer from '../ReplicasDrawer/index.vue';
 import {getBasicColumns, getFormConfig} from './Data';
 import {Tag} from 'ant-design-vue';
 import {Icon} from "@/components/Icon";
-
-
+import { Button } from '@/components/Button'
 // 模型选项列表
 const modelOptions = ref<any[]>([]);
 

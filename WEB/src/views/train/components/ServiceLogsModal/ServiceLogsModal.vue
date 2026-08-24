@@ -46,21 +46,21 @@
       </div>
       <div class="logs-footer">
         <div class="logs-footer-left">
-          <a-button type="primary" @click="handleRefresh" :loading="loading">
+          <Button type="primary" @click="handleRefresh" :loading="loading">
             <template #icon><ReloadOutlined /></template>
             刷新
-          </a-button>
-          <a-button @click="handleClear">
+          </Button>
+          <Button @click="handleClear">
             <template #icon><ClearOutlined /></template>
             清空显示
-          </a-button>
-          <a-button @click="handleScrollToBottom">
+          </Button>
+          <Button @click="handleScrollToBottom">
             <template #icon><VerticalAlignBottomOutlined /></template>
             滚动到底部
-          </a-button>
+          </Button>
         </div>
         <div class="logs-footer-right">
-          <a-button @click="handleClose">关闭</a-button>
+          <Button @click="handleClose">关闭</Button>
         </div>
       </div>
     </div>
@@ -74,15 +74,15 @@ import {useMessage} from '@/hooks/web/useMessage';
 import {getDeployServiceLogs} from '@/api/device/model';
 import {
   Empty as AEmpty, 
-  Spin as ASpin, 
-  Button as AButton,
+  Spin as ASpin,
   Switch as ASwitch,
   Select as ASelect,
   SelectOption as ASelectOption,
   Badge as ABadge
 } from 'ant-design-vue';
+import { Button } from '@/components/Button'
 import {
-  ReloadOutlined,
+ReloadOutlined,
   ClearOutlined,
   VerticalAlignBottomOutlined,
   FileTextOutlined

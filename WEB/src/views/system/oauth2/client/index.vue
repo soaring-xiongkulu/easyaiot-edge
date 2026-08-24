@@ -7,7 +7,7 @@ import { useModal } from '@/components/Modal'
 import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, TableAction, useTable } from '@/components/Table'
 import { deleteOAuth2Client, getOAuth2ClientPage } from '@/api/system/oauth2/client'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemClient' })
 
 const { t } = useI18n()
@@ -48,9 +48,9 @@ async function handleDelete(record: Recordable) {
   <div>
     <BasicTable @register="registerTable">
       <template #toolbar>
-        <a-button v-auth="['system:oauth2-client:create']" type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+        <Button v-auth="['system:oauth2-client:create']" type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
           {{ t('action.create') }}
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">

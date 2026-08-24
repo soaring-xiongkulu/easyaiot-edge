@@ -7,7 +7,7 @@ import { useModal } from '@/components/Modal'
 import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, TableAction, useTable } from '@/components/Table'
 import { deleteNotice, getNoticePage } from '@/api/system/notice'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemNotice' })
 
 const { t } = useI18n()
@@ -48,9 +48,9 @@ async function handleDelete(record: Recordable) {
   <div>
     <BasicTable @register="registerTable">
       <template #toolbar>
-        <a-button v-auth="['system:notice:create']" type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+        <Button v-auth="['system:notice:create']" type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
           {{ t('action.create') }}
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">

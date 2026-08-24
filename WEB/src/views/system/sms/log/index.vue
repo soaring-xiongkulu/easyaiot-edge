@@ -6,7 +6,7 @@ import type { SmsLogExportReqVO } from '@/api/system/sms/smsLog'
 import { exportSmsLog, getSmsLogPage } from '@/api/system/sms/smsLog'
 import { useI18n } from '@/hooks/web/useI18n'
 import { useMessage } from '@/hooks/web/useMessage'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemSmsLog' })
 
 const { t } = useI18n()
@@ -38,9 +38,9 @@ async function handleExport() {
   <div>
     <BasicTable @register="registerTable">
       <template #toolbar>
-        <a-button v-auth="['system:sms-log:export']" :pre-icon="IconEnum.EXPORT" @click="handleExport">
+        <Button v-auth="['system:sms-log:export']" :preIcon="IconEnum.EXPORT" @click="handleExport">
           {{ t('action.export') }}
-        </a-button>
+        </Button>
       </template>
     </BasicTable>
   </div>

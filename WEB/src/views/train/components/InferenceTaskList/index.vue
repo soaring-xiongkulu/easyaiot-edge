@@ -5,14 +5,14 @@
       :row-class-name="getRowClassName"
     >
       <template #toolbar>
-        <a-space>
-          <a-button type="primary" @click="openExecuteModal">
+        <Space>
+          <Button type="primary" @click="openExecuteModal">
             <template #icon>
               <PlayCircleOutlined/>
             </template>
             新增推理任务
-          </a-button>
-        </a-space>
+          </Button>
+        </Space>
       </template>
 
       <template #bodyCell="{ column, record }">
@@ -85,7 +85,8 @@ import ExecuteInferenceModal from "../ExecuteInferenceModal/index.vue";
 import InferenceDetailModal from "../InferenceDetailModal/index.vue";
 import InferenceResultViewer from "../InferenceResultViewer/index.vue";
 import {deleteInferenceRecord, getInferenceTasks, runInference} from "@/api/device/model";
-import {getBasicColumns, getFormConfig} from "@/views/train/components/TrainTaskList/Data";
+import { Button } from '@/components/Button'
+import { Space } from 'ant-design-vue'
 
 const params = {};
 
@@ -184,30 +185,26 @@ const handleExecute = async (record) => {
     state.executing = true;
     createMessage.loading({content: '任务执行中...', key: 'executing', duration: 0});
 
-    // 准备执行参数
-    const params = {
-      inference_type: record.inference_type,
-      input_source: record.input_source
-    };
+    // 统一使用 FormData，避免对象参数被按 JSON 发送导致兼容问题
+    const formData = new FormData();
+    formData.append('inference_type', record.inference_type || '');
+    if (record.input_source) {
+      formData.append('input_source', record.input_source);
+    }
 
-    // 调用API新增推理任务
-    const result = await runInference(record.model_id, params);
+    // model_id 为空时按默认模型处理
+    const modelId = typeof record.model_id === 'number' ? record.model_id : 0;
+    const response = await runInference(modelId, formData);
+    const result = response?.data || response;
 
     if (result.code === 0) {
       createMessage.success({content: '任务执行成功', key: 'executing'});
-
-      // 添加新记录到列表
-      const newRecord = {
-        ...result.data,
-        start_time: formatDateTime(result.data.start_time)
-      };
-
-      state.records.unshift(newRecord);
+      await reload();
     } else {
       createMessage.error({content: result.msg || '执行失败', key: 'executing'});
     }
-  } catch (error) {
-    createMessage.error({content: `执行失败: ${error.message}`, key: 'executing'});
+  } catch (error: any) {
+    createMessage.error({content: `执行失败: ${error?.message || '未知错误'}`, key: 'executing'});
     console.error('执行错误:', error);
   } finally {
     state.executing = false;

@@ -6,7 +6,7 @@ import { useModal } from '@/components/Modal'
 import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, useTable } from '@/components/Table'
 import { getAreaTree } from '@/api/system/area'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemArea' })
 
 const { t } = useI18n()
@@ -37,15 +37,15 @@ function handleCreate() {
   <div>
     <BasicTable class="p-4" @register="register">
       <template #toolbar>
-        <a-button type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+        <Button type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
           IP 查询
-        </a-button>
-        <a-button @click="expandAll">
+        </Button>
+        <Button @click="expandAll">
           {{ t('component.tree.expandAll') }}
-        </a-button>
-        <a-button @click="collapseAll">
+        </Button>
+        <Button @click="collapseAll">
           {{ t('component.tree.unExpandAll') }}
-        </a-button>
+        </Button>
       </template>
     </BasicTable>
     <AreaModal @register="registerModal" @success="reload()" />

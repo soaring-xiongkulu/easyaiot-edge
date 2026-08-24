@@ -12,7 +12,7 @@ import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, TableAction, useTable } from '@/components/Table'
 import type { UserExportReqVO } from '@/api/system/user'
 import { deleteUser, exportUser, getUserPage } from '@/api/system/user'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemUser' })
 
 const { t } = useI18n()
@@ -94,12 +94,12 @@ function handleSelect(deptId = '') {
       <DeptTree class="w-1/4 xl:w-1/5" @select="handleSelect" />
       <BasicTable class="w-3/4 xl:w-4/5" :search-info="searchInfo" @register="registerTable">
         <template #toolbar>
-          <a-button v-auth="['system:user:create']" type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+          <Button v-auth="['system:user:create']" type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
             {{ t('action.create') }}
-          </a-button>
-          <a-button v-auth="['system:user:export']" :pre-icon="IconEnum.EXPORT" @click="handleExport">
+          </Button>
+          <Button v-auth="['system:user:export']" :preIcon="IconEnum.EXPORT" @click="handleExport">
             {{ t('action.export') }}
-          </a-button>
+          </Button>
         </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'action'">

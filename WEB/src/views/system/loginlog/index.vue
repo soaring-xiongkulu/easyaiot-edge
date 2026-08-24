@@ -5,8 +5,7 @@ import { useMessage } from '@/hooks/web/useMessage'
 import { BasicTable, useTable } from '@/components/Table'
 import type { LoginLogReqVO } from '@/api/system/loginLog'
 import { exportLoginLog, getLoginLogPage } from '@/api/system/loginLog'
-
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemLoginLog' })
 
 const { t } = useI18n()
@@ -38,9 +37,9 @@ async function handleExport() {
   <div>
     <BasicTable @register="registerTable">
       <template #toolbar>
-        <a-button v-auth="['system:login-log:export']" @click="handleExport">
+        <Button v-auth="['system:login-log:export']" @click="handleExport">
           {{ t('action.export') }}
-        </a-button>
+        </Button>
       </template>
     </BasicTable>
   </div>

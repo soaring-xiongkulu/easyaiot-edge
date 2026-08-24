@@ -26,12 +26,17 @@
 
           <template #renderItem="{ item }">
             <ListItem class="alert-item normal">
+              <span class="task-type-tag" :class="getTaskTypeClass(item)">
+                {{ getTaskTypeText(item) }}
+              </span>
               <div class="alert-info">
                 <div class="title-wrapper">
-                <div class="title o2">{{ item.event || '未知事件' }}</div>
-                  <span class="task-type-tag" :class="getTaskTypeClass(item)">
-                    {{ getTaskTypeText(item) }}
-                  </span>
+                  <div class="title o2">
+                    <span class="event-name">{{ formatAlertEvent(item.event) }}</span>
+                  </div>
+                </div>
+                <div v-if="item.business_tags?.length" class="alert-business-tags">
+                  <a-tag v-for="tag in item.business_tags" :key="tag" color="blue" size="small">{{ tag }}</a-tag>
                 </div>
                 <div class="props">
                   <div class="flex" style="justify-content: space-between;">
@@ -53,8 +58,14 @@
                       <div class="value">{{ item.device_name || '-' }}</div>
                     </div>
                     <div class="prop">
-                      <div class="label">告警对象</div>
-                      <div class="value">{{ item.object || '-' }}</div>
+                      <div class="label">{{ item.event === 'face_library_match' ? '匹配人员' : '告警对象' }}</div>
+                      <div class="value">{{ getAlertObjectLabel(item) }}</div>
+                    </div>
+                  </div>
+                  <div v-if="item.event === 'face_library_match'" class="flex" style="justify-content: space-between;">
+                    <div class="prop">
+                      <div class="label">触发告警</div>
+                      <div class="value">{{ formatAlertEvent(getAlertSourceEvent(item)) || '-' }}</div>
                     </div>
                   </div>
                 </div>
@@ -62,7 +73,7 @@
                   <div class="btn" @click="handleCopy(item)">
                     <Icon icon="tdesign:copy-filled" :size="15" color="#3B82F6" />
                   </div>
-                  <div class="btn" @click="handleViewImage(item)" v-if="item.image_url || item.image_path">
+                  <div class="btn" @click="handleViewImage(item)" v-if="item.image_url">
                     <Icon icon="ion:image-sharp" :size="15" color="#3B82F6" />
                   </div>
                   <div class="btn" @click="handleViewVideo(item)" v-if="item.device_id && item.time && !isSnapTask(item)">
@@ -71,7 +82,7 @@
                 </div>
               </div>
               <div class="alert-img">
-                <img :src="ALERT"alt="" class="img">
+                <img :src="thumbUrl(item.image_url) || ALERT" alt="" class="img">
               </div>
             </ListItem>
           </template>
@@ -83,6 +94,7 @@
 
 <script lang="ts" setup>
 import { onMounted, onUnmounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { List, Spin } from 'ant-design-vue';
 import { BasicForm, useForm } from '@/components/Form';
 import { propTypes } from '@/utils/propTypes';
@@ -91,7 +103,9 @@ import { useMessage } from '@/hooks/web/useMessage';
 import { Icon } from '@/components/Icon';
 import moment from 'moment';
 import ALERT from "@/assets/images/alert/alert.png";
-import { alertCameraSelectProps } from '@/views/alert/Data';
+import { alertCameraSelectProps, alertFilterActionColOptions } from '@/views/alert/Data';
+import { ALERT_EVENT_OPTIONS, formatAlertEvent, getAlertMatchedPersonName, getAlertSourceEvent, normalizeAlertBusinessTagsParam } from '@/views/alert/alertDisplay';
+import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage';
 
 const ListItem = List.Item;
 
@@ -104,6 +118,7 @@ const props = defineProps({
 });
 
 const { createMessage } = useMessage();
+const router = useRouter();
 
 // 暴露内部方法
 const emit = defineEmits(['getMethod', 'viewImage', 'viewVideo']);
@@ -114,117 +129,142 @@ const state = reactive({
   loading: true,
 });
 
-// 表单
-const [registerForm, { validate }] = useForm({
+const lastFormParams = ref<Record<string, any>>({});
+
+const page = ref(1);
+const pageSize = ref(8);
+const total = ref(0);
+
+function processFormData(formData: Record<string, any>): Record<string, any> {
+  const processedData = { ...formData };
+  const timeRangeKey = '[begin_datetime, end_datetime]';
+  if (processedData[timeRangeKey] && Array.isArray(processedData[timeRangeKey])) {
+    const [begin, end] = processedData[timeRangeKey];
+    if (begin && typeof begin.format === 'function') {
+      processedData.begin_datetime = begin.format('YYYY-MM-DD HH:mm:ss');
+    } else if (begin) {
+      processedData.begin_datetime = begin;
+    }
+    if (end && typeof end.format === 'function') {
+      processedData.end_datetime = end.format('YYYY-MM-DD HH:mm:ss');
+    } else if (end) {
+      processedData.end_datetime = end;
+    }
+    delete processedData[timeRangeKey];
+  }
+  if (processedData.task_name) {
+    processedData.task_name = String(processedData.task_name).trim();
+    if (!processedData.task_name) delete processedData.task_name;
+  }
+  const businessTagsParam = normalizeAlertBusinessTagsParam(processedData.business_tags);
+  if (businessTagsParam) {
+    processedData.business_tags = businessTagsParam;
+  } else {
+    delete processedData.business_tags;
+  }
+  const route = router.currentRoute.value;
+  if (route.query.task_name && !processedData.task_name) {
+    processedData.task_name = String(route.query.task_name).trim();
+  }
+  if (
+    processedData.device_id !== undefined &&
+    processedData.device_id !== null &&
+    String(processedData.device_id).trim() === ''
+  ) {
+    delete processedData.device_id;
+  }
+  if (
+    processedData.begin_datetime === null ||
+    processedData.begin_datetime === undefined ||
+    processedData.begin_datetime === ''
+  ) {
+    delete processedData.begin_datetime;
+  }
+  if (
+    processedData.end_datetime === null ||
+    processedData.end_datetime === undefined ||
+    processedData.end_datetime === ''
+  ) {
+    delete processedData.end_datetime;
+  }
+  return processedData;
+}
+
+function snapshotFilters(processedData: Record<string, any>): Record<string, any> {
+  const filterParams: Record<string, any> = {};
+  if (processedData.begin_datetime) filterParams.begin_datetime = processedData.begin_datetime;
+  if (processedData.end_datetime) filterParams.end_datetime = processedData.end_datetime;
+  if (processedData.task_name) filterParams.task_name = processedData.task_name;
+  if (processedData.device_id !== undefined && processedData.device_id !== '' && processedData.device_id !== null) {
+    filterParams.device_id = processedData.device_id;
+  }
+  if (processedData.event !== undefined && processedData.event !== null && processedData.event !== '') {
+    filterParams.event = processedData.event;
+  }
+  if (processedData.business_tags) {
+    filterParams.business_tags = processedData.business_tags;
+  }
+  return filterParams;
+}
+
+async function handleSubmit() {
+  let formData: Record<string, any>;
+  try {
+    formData = await validate();
+  } catch (error: any) {
+    // 摄像头下拉（ApiSelect）选项异步加载会让校验“过期”，
+    // ant-design-vue 会以 { errorFields: [], outOfDate: true } 形式 reject，
+    // 这并非真正的校验失败，吞掉避免未处理的 Promise 异常。
+    if (error?.outOfDate && (!error?.errorFields || error.errorFields.length === 0))
+      return;
+    throw error;
+  }
+  const processedData = processFormData(formData);
+  lastFormParams.value = snapshotFilters(processedData);
+  page.value = 1;
+  await fetch(processedData);
+}
+
+const [registerForm, { validate, setFieldsValue, getFieldsValue }] = useForm({
   schemas: [
+    {
+      field: 'task_name',
+      label: '任务名称',
+      component: 'Input',
+      componentProps: {
+        placeholder: '请输入任务名称（模糊匹配）',
+      },
+      colProps: { span: 8 },
+    },
     {
       field: `device_id`,
       label: `摄像头`,
       component: 'ApiSelect',
       componentProps: alertCameraSelectProps,
       defaultValue: '',
-    },
-    {
-      field: `object`,
-      label: `告警对象`,
-      component: 'Select',
-      componentProps: {
-        options: [
-          {value: null, label: '全部'},
-          {value: "人", label: "人"},
-          {value: "自行车", label: "自行车"},
-          {value: "汽车", label: "汽车"},
-          {value: "摩托车", label: "摩托车"},
-          {value: "飞机", label: "飞机"},
-          {value: "公共汽车", label: "公共汽车"},
-          {value: "火车", label: "火车"},
-          {value: "卡车", label: "卡车"},
-          {value: "船", label: "船"},
-          {value: "交通灯", label: "交通灯"},
-          {value: "消防栓", label: "消防栓"},
-          {value: "停车标志", label: "停车标志"},
-          {value: "停车收费表", label: "停车收费表"},
-          {value: "长凳", label: "长凳"},
-          {value: "鸟", label: "鸟"},
-          {value: "猫", label: "猫"},
-          {value: "狗", label: "狗"},
-          {value: "马", label: "马"},
-          {value: "羊", label: "羊"},
-          {value: "母牛", label: "母牛"},
-          {value: "大象", label: "大象"},
-          {value: "熊", label: "熊"},
-          {value: "斑马", label: "斑马"},
-          {value: "长颈鹿", label: "长颈鹿"},
-          {value: "背包", label: "背包"},
-          {value: "雨伞", label: "雨伞"},
-          {value: "手提包", label: "手提包"},
-          {value: "领带", label: "领带"},
-          {value: "手提箱", label: "手提箱"},
-          {value: "飞盘", label: "飞盘"},
-          {value: "滑雪板", label: "滑雪板"},
-          {value: "运动用球", label: "运动用球"},
-          {value: "风筝", label: "风筝"},
-          {value: "棒球棍", label: "棒球棍"},
-          {value: "棒球手套", label: "棒球手套"},
-          {value: "滑板", label: "滑板"},
-          {value: "冲浪板", label: "冲浪板"},
-          {value: "网球拍", label: "网球拍"},
-          {value: "瓶子", label: "瓶子"},
-          {value: "酒杯", label: "酒杯"},
-          {value: "杯子", label: "杯子"},
-          {value: "叉", label: "叉"},
-          {value: "刀", label: "刀"},
-          {value: "勺子", label: "勺子"},
-          {value: "碗", label: "碗"},
-          {value: "香蕉", label: "香蕉"},
-          {value: "苹果", label: "苹果"},
-          {value: "三明治", label: "三明治"},
-          {value: "橙子", label: "橙子"},
-          {value: "西兰花", label: "西兰花"},
-          {value: "胡萝卜", label: "胡萝卜"},
-          {value: "热狗", label: "热狗"},
-          {value: "披萨", label: "披萨"},
-          {value: "甜甜圈", label: "甜甜圈"},
-          {value: "糕饼", label: "糕饼"},
-          {value: "椅子", label: "椅子"},
-          {value: "沙发", label: "沙发"},
-          {value: "盆栽植物", label: "盆栽植物"},
-          {value: "床", label: "床"},
-          {value: "餐桌", label: "餐桌"},
-          {value: "马桶", label: "马桶"},
-          {value: "显示器", label: "显示器"},
-          {value: "笔记本电脑", label: "笔记本电脑"},
-          {value: "鼠标", label: "鼠标"},
-          {value: "遥控器", label: "遥控器"},
-          {value: "键盘", label: "键盘"},
-          {value: "手机", label: "手机"},
-          {value: "微波炉", label: "微波炉"},
-          {value: "烤箱", label: "烤箱"},
-          {value: "烤面包机", label: "烤面包机"},
-          {value: "洗手池", label: "洗手池"},
-          {value: "冰箱", label: "冰箱"},
-          {value: "书", label: "书"},
-          {value: "时钟", label: "时钟"},
-          {value: "花瓶", label: "花瓶"},
-          {value: "剪刀", label: "剪刀"},
-          {value: "泰迪熊", label: "泰迪熊"},
-          {value: "吹风机", label: "吹风机"},
-          {value: "牙刷", label: "牙刷"},
-        ],
-      },
-      defaultValue: null,
+      colProps: { span: 8 },
     },
     {
       field: `event`,
       label: `告警事件`,
       component: 'Select',
       componentProps: {
-        options: [
-          {value: null, label: '全部'},
-          {value: "行人检测", label: "行人检测"},
-        ]
+        options: [...ALERT_EVENT_OPTIONS],
       },
       defaultValue: null,
+      colProps: { span: 8 },
+    },
+    {
+      field: 'business_tags',
+      label: '业务标签',
+      component: 'Select',
+      componentProps: {
+        mode: 'tags',
+        placeholder: '输入标签后回车，支持多个',
+        tokenSeparators: [','],
+        open: false,
+      },
+      colProps: { span: 8 },
     },
     {
       field: '[begin_datetime, end_datetime]',
@@ -235,32 +275,30 @@ const [registerForm, { validate }] = useForm({
         placeholder: ['开始时间', '结束时间'],
         showTime: { format: 'HH:mm:ss' },
       },
+      colProps: { span: 8 },
     },
   ],
   labelWidth: 120,
-  baseColProps: { span: 6 },
-  actionColOptions: { span: 6 },
+  baseColProps: { span: 8 },
+  actionColOptions: alertFilterActionColOptions,
+  showAdvancedButton: false,
+  alwaysShowLines: 2,
   autoSubmitOnEnter: true,
   submitFunc: handleSubmit,
+  submitOnReset: true,
 });
-
-// 表单提交
-async function handleSubmit() {
-  const formData = await validate();
-  // 处理时间范围参数
-  const timeRangeKey = '[begin_datetime, end_datetime]';
-  if (formData[timeRangeKey] && Array.isArray(formData[timeRangeKey])) {
-    const [begin, end] = formData[timeRangeKey];
-    formData.begin_datetime = begin;
-    formData.end_datetime = end;
-    delete formData[timeRangeKey];
-  }
-  await fetch(formData);
-}
 
 // 自动请求并暴露内部方法
 onMounted(() => {
-  fetch();
+  const route = router.currentRoute.value;
+  if (route.query.task_name) {
+    setFieldsValue({ task_name: route.query.task_name });
+    setTimeout(() => {
+      fetch({ task_name: String(route.query.task_name).trim() });
+    }, 100);
+  } else {
+    fetch();
+  }
   emit('getMethod', fetch);
 });
 
@@ -269,7 +307,13 @@ async function fetch(p = {}) {
   if (api && isFunction(api)) {
     try {
       state.loading = true;
-      const res = await api({ ...params, pageNo: page.value, pageSize: pageSize.value, ...p });
+      const requestParams = {
+        ...params,
+        pageNo: page.value,
+        pageSize: pageSize.value,
+        ...p,
+      };
+      const res = await api(requestParams);
       // 根据表格配置，返回格式为 { alert_list: [...], total: ... }
       data.value = res.alert_list || [];
       total.value = res.total || 0;
@@ -287,10 +331,6 @@ function hideLoading() {
   state.loading = false;
 }
 
-// 分页相关
-const page = ref(1);
-const pageSize = ref(8);
-const total = ref(0);
 const paginationProp = ref({
   showSizeChanger: false,
   showQuickJumper: true,
@@ -305,17 +345,63 @@ const paginationProp = ref({
 function pageChange(p: number, pz: number) {
   page.value = p;
   pageSize.value = pz;
-  fetch();
+
+  const currentFormData = getFieldsValue();
+  const processedData = processFormData(currentFormData);
+  const hasFilterParams = !!(
+    processedData.begin_datetime ||
+    processedData.end_datetime ||
+    processedData.task_name ||
+    processedData.device_id ||
+    processedData.event
+  );
+
+  let formParams: Record<string, any> = {};
+  if (hasFilterParams) {
+    formParams = { ...processedData };
+    lastFormParams.value = snapshotFilters(processedData);
+  } else if (Object.keys(lastFormParams.value).length > 0) {
+    formParams = { ...lastFormParams.value };
+  }
+
+  fetch(formParams);
 }
 
 function pageSizeChange(_current, size: number) {
   pageSize.value = size;
-  fetch();
+  page.value = 1;
+
+  const currentFormData = getFieldsValue();
+  const processedData = processFormData(currentFormData);
+  const hasFilterParams = !!(
+    processedData.begin_datetime ||
+    processedData.end_datetime ||
+    processedData.task_name ||
+    processedData.device_id ||
+    processedData.event
+  );
+
+  let formParams: Record<string, any> = {};
+  if (hasFilterParams) {
+    formParams = { ...processedData };
+    lastFormParams.value = snapshotFilters(processedData);
+  } else if (Object.keys(lastFormParams.value).length > 0) {
+    formParams = { ...lastFormParams.value };
+  }
+
+  fetch(formParams);
 }
 
 function formatTime(time: string) {
   if (!time) return '-';
   return moment(time).format('YYYY-MM-DD HH:mm:ss');
+}
+
+function getAlertObjectLabel(item: any): string {
+  if (item?.event === 'face_library_match') {
+    return getAlertMatchedPersonName(item) || '-';
+  }
+  return item?.object || '-';
 }
 
 // 获取任务类型
@@ -401,7 +487,8 @@ async function handleCopyDeviceId(deviceId: string | null | undefined) {
 }
 
 async function handleViewImage(record: object) {
-  if (!record['image_url'] && !record['image_path']) {
+  const r = record as Record<string, any>;
+  if (!r['image_url'] || String(r['image_url']).trim() === '') {
     createMessage.warn('告警图片不存在');
     return;
   }
@@ -433,40 +520,8 @@ async function handleCopy(record: object) {
   createMessage.success('复制成功');
 }
 
-// 图片处理 - 直接使用后台返回的 minio URL
-function getImageUrl(imageUrl: string | null | undefined, imagePath: string | null | undefined): string {
-  // 优先使用 image_url（后台返回的 minio URL）
-  if (imageUrl) {
-    // 如果是完整URL，直接返回
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-      return imageUrl;
-    }
-    // 如果是MinIO路径（以/api/v1/buckets开头），添加前端启动地址前缀
-    if (imageUrl.startsWith('/api/v1/buckets')) {
-      return `${window.location.origin}${imageUrl}`;
-    }
-    // 其他相对路径，添加前端启动地址前缀
-    if (imageUrl.startsWith('/')) {
-      return `${window.location.origin}${imageUrl}`;
-    }
-    return imageUrl;
-  }
-  
-  // 如果没有 image_url，使用 image_path 作为后备
-  if (imagePath) {
-    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-      return imagePath;
-    }
-    if (imagePath.startsWith('/api/v1/buckets')) {
-      return `${window.location.origin}${imagePath}`;
-    }
-    if (imagePath.startsWith('/')) {
-      return `${window.location.origin}${imagePath}`;
-    }
-    return imagePath;
-  }
-  
-  return '';
+function thumbUrl(imageUrl: string | null | undefined): string {
+  return resolveAlertImageDisplayUrl(imageUrl);
 }
 </script>
 
@@ -519,68 +574,82 @@ function getImageUrl(imageUrl: string | null | undefined, imagePath: string | nu
       background-image: url('@/assets/images/product/red-bg.101af5ac.png');
     }
 
+    .task-type-tag {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 2;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border-radius: 0 11px 0 8px;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.2;
+      white-space: nowrap;
+      transition: all 0.3s ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+
+      &.task-type-realtime {
+        background: #3B82F6;
+        color: #ffffff;
+        border: 1px solid #2563EB;
+        border-top: none;
+        border-right: none;
+
+        &:hover {
+          box-shadow: 0 2px 6px rgba(59, 130, 246, 0.4);
+          background: #2563EB;
+        }
+      }
+
+      &.task-type-snap {
+        background: #10B981;
+        color: #ffffff;
+        border: 1px solid #059669;
+        border-top: none;
+        border-right: none;
+
+        &:hover {
+          box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4);
+          background: #059669;
+        }
+      }
+    }
+
     .alert-info {
       flex-direction: column;
-      max-width: calc(100% - 128px);
+      max-width: calc(100% - 108px);
       padding-left: 16px;
+      padding-right: 4px;
 
       .title-wrapper {
         display: flex;
         align-items: center;
-        gap: 8px;
         height: 40px;
         margin-bottom: 2px;
+        padding-right: 52px;
 
-      .title {
+        .title {
           flex: 1;
-        font-size: 16px;
-        font-weight: 600;
-        color: #050708;
-        line-height: 20px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-          min-width: 0; // 允许flex子元素收缩
-        }
-        
-        .task-type-tag {
-          flex-shrink: 0;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          padding: 3px 10px;
-          border-radius: 4px;
-          font-size: 12px;
-          font-weight: 500;
-          line-height: 1.2;
+          font-size: 16px;
+          font-weight: 600;
+          color: #050708;
+          line-height: 20px;
+          overflow: hidden;
+          text-overflow: ellipsis;
           white-space: nowrap;
-          transition: all 0.3s ease;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-          
-          &.task-type-realtime {
-            background: #3B82F6;
-            color: #ffffff;
-            border: 1px solid #2563EB;
-            
-            &:hover {
-              transform: translateY(-1px);
-              box-shadow: 0 2px 6px rgba(59, 130, 246, 0.4);
-              background: #2563EB;
-            }
-          }
-          
-          &.task-type-snap {
-            background: #10B981;
-            color: #ffffff;
-            border: 1px solid #059669;
-            
-            &:hover {
-              transform: translateY(-1px);
-              box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4);
-              background: #059669;
-            }
-          }
+          min-width: 0;
         }
+      }
+
+      .alert-business-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-bottom: 8px;
+        padding-left: 0;
       }
 
       .props {
@@ -706,16 +775,16 @@ function getImageUrl(imageUrl: string | null | undefined, imagePath: string | nu
 
       img {
         cursor: pointer;
-        width: 120px;
-        height: 90px;
+        width: 80px;
+        height: 60px;
         object-fit: cover;
-        border-radius: 8px;
+        border-radius: 6px;
         transition: all 0.3s ease;
       }
 
       .no-image {
-        width: 120px;
-        height: 90px;
+        width: 80px;
+        height: 60px;
         display: flex;
         flex-direction: column;
         align-items: center;

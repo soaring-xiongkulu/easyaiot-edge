@@ -9,7 +9,7 @@ import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, TableAction, useTable } from '@/components/Table'
 import { deleteMenu, getMenuList } from '@/api/system/menu'
 import { usePermission } from '@/hooks/web/usePermission'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemMenu' })
 
 const { t } = useI18n()
@@ -76,18 +76,18 @@ function refreshMenu() {
   <div>
     <BasicTable @register="register">
       <template #toolbar>
-        <a-button v-auth="['system:menu:create']" type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+        <Button v-auth="['system:menu:create']" type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
           {{ t('action.create') }}
-        </a-button>
-        <a-button @click="expandAll">
+        </Button>
+        <Button @click="expandAll">
           {{ t('component.tree.expandAll') }}
-        </a-button>
-        <a-button @click="collapseAll">
+        </Button>
+        <Button @click="collapseAll">
           {{ t('component.tree.unExpandAll') }}
-        </a-button>
-        <a-button color="warning" pre-icon="ep:refresh" @click="refreshMenu">
+        </Button>
+        <Button color="warning" preIcon="ep:refresh" @click="refreshMenu">
           刷新菜单缓存
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">

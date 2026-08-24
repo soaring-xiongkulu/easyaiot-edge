@@ -8,16 +8,45 @@
         @tabClick="handleTabClick"
       >
         <TabPane key="1" tab="模型管理">
-          <ModelList></ModelList>
+<!--          <GpuStackMonitorTip class="page-monitor-tip" />-->
+          <div class="tab-pane-scroll">
+            <ModelList />
+          </div>
         </TabPane>
-        <TabPane key="2" tab="模型推理">
-          <AiModelTool></AiModelTool>
+        <TabPane v-if="showAdvancedTabs" key="6" tab="模型训练">
+          <div class="tab-pane-scroll">
+            <TrainTaskList
+              :tab-active="state.activeKey === '6'"
+              :auto-open="route.query.launch === '1'"
+              :initial-dataset-id="initialDatasetId"
+            />
+          </div>
         </TabPane>
-        <TabPane key="3" tab="模型导出">
-          <ModelExport></ModelExport>
+        <!-- edge：仅 VIDEO 本地模型 CRUD，无 AI 推理服务 -->
+        <TabPane v-if="showInferenceTab" key="2" tab="模型推理">
+          <div class="tab-pane-scroll">
+            <AiModelTool :initialLLMId="initialLLMId" :tab-active="state.activeKey === '2'" />
+          </div>
         </TabPane>
-        <TabPane key="4" tab="模型部署">
-          <DeployService></DeployService>
+        <TabPane v-if="showAdvancedTabs" key="7" tab="SAM 万物识别">
+          <div class="tab-pane-scroll">
+            <SamInferencePage />
+          </div>
+        </TabPane>
+        <TabPane v-if="showAdvancedTabs" key="3" tab="模型导出">
+          <div class="tab-pane-scroll">
+            <ModelExport></ModelExport>
+          </div>
+        </TabPane>
+        <TabPane v-if="showAdvancedTabs" key="4" tab="模型部署">
+          <div class="tab-pane-scroll">
+            <DeployService></DeployService>
+          </div>
+        </TabPane>
+        <TabPane v-if="showAdvancedTabs" key="5" tab="大模型管理">
+          <div class="tab-pane-scroll">
+            <LLMManage ref="llmManageRef"></LLMManage>
+          </div>
         </TabPane>
       </Tabs>
     </div>
@@ -25,50 +54,151 @@
 </template>
 
 <script lang="ts" setup name="TrainService">
-import {reactive, onMounted} from 'vue';
+import {reactive, onMounted, ref, computed} from 'vue';
 import {useRoute} from 'vue-router';
 import { TabPane, Tabs } from "ant-design-vue";
 import ModelList from "@/views/train/components/ModelList/index.vue";
+import TrainTaskList from "@/views/train/components/TrainTaskList/index.vue";
 import AiModelTool from "@/views/train/components/AiModelTool/index.vue";
 import ModelExport from "@/views/train/components/ModelExport/index.vue";
 import DeployService from "@/views/train/components/DeployService/index.vue";
+import LLMManage from "@/views/train/components/LLMManage/index.vue";
+import SamInferencePage from "@/views/model/SamInference/index.vue";
+import GpuStackMonitorTip from '@/components/GpuStackMonitorTip/index.vue';
+import { isEdgeStandaloneDeployProfile, isTrainAdvancedEnabled } from '@/utils/deployProfile';
+
 defineOptions({name: 'TRAIN'})
 
 const route = useRoute();
+const showAdvancedTabs = isTrainAdvancedEnabled();
+/** edge 单机：仅模型管理（VIDEO 本地 CRUD）；推理依赖 AI 模块，不展示 */
+const showInferenceTab = !isEdgeStandaloneDeployProfile();
+const edgeStandalone = isEdgeStandaloneDeployProfile();
+
+const TRAIN_TAB_KEYS = {
+  MODEL_LIST: '1',
+  INFERENCE: '2',
+  EXPORT: '3',
+  DEPLOY: '4',
+  LLM: '5',
+  TRAIN_TASK: '6',
+  SAM: '7',
+} as const;
+
+const MINI_TRAIN_TAB_KEYS = new Set<string>([
+  TRAIN_TAB_KEYS.MODEL_LIST,
+  TRAIN_TAB_KEYS.INFERENCE,
+]);
+
+const EDGE_TRAIN_TAB_KEYS = new Set<string>([
+  TRAIN_TAB_KEYS.MODEL_LIST,
+]);
+
+function normalizeTrainRouteTab(tab: string): string {
+  if (edgeStandalone) {
+    return EDGE_TRAIN_TAB_KEYS.has(tab) ? tab : TRAIN_TAB_KEYS.MODEL_LIST;
+  }
+  if (!showAdvancedTabs && !MINI_TRAIN_TAB_KEYS.has(tab)) {
+    return TRAIN_TAB_KEYS.MODEL_LIST;
+  }
+  return tab;
+}
 
 const state = reactive({
-  activeKey: '1'
+  activeKey: TRAIN_TAB_KEYS.MODEL_LIST
 });
+
+// 大模型管理组件引用
+const llmManageRef = ref();
 
 const handleTabClick = (activeKey: string) => {
   state.activeKey = activeKey;
+  // 切换到大模型管理标签页时，刷新数据
+  if (activeKey === '5' && llmManageRef.value) {
+    llmManageRef.value.refresh();
+  }
 };
+
+// 从路由参数获取大模型ID
+const initialLLMId = computed(() => {
+  const llmId = route.query.llmId as string;
+  return llmId ? parseInt(llmId, 10) : null;
+});
+
+const initialDatasetId = computed(() => {
+  const value = route.query.datasetId;
+  return typeof value === 'string' ? value : undefined;
+});
 
 // 处理路由参数，自动切换到指定tab
 onMounted(() => {
   const tab = route.query.tab as string;
   if (tab) {
-    state.activeKey = tab;
+    state.activeKey = normalizeTrainRouteTab(tab);
   }
 });
 </script>
 
 <style lang="less" scoped>
 .train-wrapper {
+  height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #ffffff;
+
   :deep(.ant-tabs-nav) {
     padding: 5px 0 0 25px;
+    flex-shrink: 0;
   }
 
   .train-tab {
-    padding: 16px 19px 0 15px;
+    flex: 1;
+    min-height: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 
     .ant-tabs {
       background-color: #FFFFFF;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
 
       :deep(.ant-tabs-nav) {
         padding: 5px 0 0 25px;
+        flex-shrink: 0;
+      }
+
+      :deep(.ant-tabs-content-holder) {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      :deep(.ant-tabs-content) {
+        height: 100%;
+      }
+
+      :deep(.ant-tabs-tabpane) {
+        height: 100%;
+        overflow: hidden;
+
+        > div {
+          height: 100%;
+          min-height: 0;
+        }
       }
     }
+  }
+
+  .tab-pane-scroll {
+    height: 100%;
+    overflow-y: auto;
+    padding-bottom: 16px; // 底部预留空隙，防止分页贴边
   }
 }
 </style>

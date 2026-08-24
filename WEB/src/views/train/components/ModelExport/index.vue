@@ -6,17 +6,17 @@
       @field-value-change="handleTableFieldValueChange"
     >
       <template #toolbar>
-        <a-button 
+        <Button 
           type="primary" 
           @click="handleExport"
           :loading="exportLoading.onnx || exportLoading.openvino"
           preIcon="ant-design:export-outlined"
         >
           导出模型
-        </a-button>
-        <a-button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
+        </Button>
+        <Button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
           切换视图
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.dataIndex === 'format'">
@@ -38,8 +38,8 @@
           </div>
         </template>
         <template v-else-if="column.dataIndex === 'action'">
-          <a-space>
-            <a-button
+          <Space>
+            <Button
               type="link"
               size="small"
               :disabled="record.status !== 'COMPLETED'"
@@ -50,14 +50,14 @@
                 <DownloadOutlined />
               </template>
               下载
-            </a-button>
+            </Button>
             <a-popconfirm
               title="确定删除此导出记录吗？"
               ok-text="确认"
               cancel-text="取消"
               @confirm="handleDelete(record)"
             >
-              <a-button
+              <Button
                 type="link"
                 size="small"
                 danger
@@ -67,9 +67,9 @@
                   <DeleteOutlined />
                 </template>
                 删除
-              </a-button>
+              </Button>
             </a-popconfirm>
-          </a-space>
+          </Space>
         </template>
       </template>
     </BasicTable>
@@ -84,17 +84,17 @@
         @field-value-change="handleFieldValueChange"
       >
         <template #header>
-          <a-button 
+          <Button 
             type="primary" 
             @click="handleExport"
             :loading="exportLoading.onnx || exportLoading.openvino"
             preIcon="ant-design:export-outlined"
           >
             导出模型
-          </a-button>
-          <a-button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
+          </Button>
+          <Button type="default" @click="handleClickSwap" preIcon="ant-design:swap-outlined">
             切换视图
-          </a-button>
+          </Button>
         </template>
       </ModelExportCardList>
     </div>
@@ -128,8 +128,9 @@ import {
   DeleteOutlined,
 } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
-import { message } from 'ant-design-vue';
-
+import {message, Space} from 'ant-design-vue';
+import { Button } from '@/components/Button'
+import { formatModelVersionDisplay } from '../../utils/modelVersionUtils';
 defineOptions({ name: 'ModelExport' });
 
 const { createMessage } = useMessage();
@@ -234,7 +235,7 @@ const loadModels = async () => {
   
   modelsLoading.value = true;
   try {
-    const response = await getModelPage({ page: 1, size: 100 });
+    const response = await getModelPage({ pageNo: 1, pageSize: 1000 });
     // 处理响应数据：可能是转换后的数组，也可能是包含 code/data 的对象
     let allModels: any[] = [];
     if (Array.isArray(response)) {
@@ -254,7 +255,7 @@ const loadModels = async () => {
     
     // 构建选项列表
     modelOptions.value = models.value.map((model: any) => ({
-      label: `${model.name} (v${model.version})`,
+      label: `${model.name} (${formatModelVersionDisplay(model.version)})`,
       value: model.id,
     }));
     
@@ -377,7 +378,6 @@ const [registerTable, { reload, getForm }] = useTable({
   },
   rowKey: 'id',
 });
-
 
 // 打开导出确认弹框
 const handleExport = () => {

@@ -1,4 +1,5 @@
 import {BasicColumn, FormProps} from '@/components/Table';
+import { formatClusterRuntime } from '@/utils/clusterRuntime';
 
 export const getBasicColumns = (): BasicColumn[] => {
   return [
@@ -11,6 +12,12 @@ export const getBasicColumns = (): BasicColumn[] => {
       title: '模型名称',
       dataIndex: 'model_name',
       width: 150,
+    },
+    {
+      title: '运行节点',
+      dataIndex: 'server_ip',
+      width: 180,
+      customRender: ({ record }) => formatClusterRuntime(record),
     },
     {
       title: '状态',

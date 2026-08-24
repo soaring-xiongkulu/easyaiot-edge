@@ -39,12 +39,12 @@
               </a-menu-item>
             </a-menu>
           </template>
-          <a-button type="primary" class="export-btn">
+          <Button type="primary" class="export-btn">
             <template #icon>
               <ExportOutlined />
             </template>
             导出模型
-          </a-button>
+          </Button>
         </a-dropdown>
       </template>
 
@@ -52,7 +52,7 @@
       <template #empty>
         <a-empty description="暂无导出记录" image="/images/empty.svg">
           <p class="empty-tip">提示：导出任务通常需要3-5分钟完成</p>
-          <a-button type="primary" @click="openExportModal">立即导出</a-button>
+          <Button type="primary" @click="openExportModal">立即导出</Button>
         </a-empty>
       </template>
 
@@ -142,12 +142,12 @@
         </a-form-item>
 
         <a-form-item :wrapper-col="{ span: 14, offset: 6 }">
-          <a-button type="primary" html-type="submit" :loading="exportLoading">
+          <Button type="primary" html-type="submit" :loading="exportLoading">
             开始导出
-          </a-button>
-          <a-button style="margin-left: 10px" @click="exportModalVisible = false">
+          </Button>
+          <Button style="margin-left: 10px" @click="exportModalVisible = false">
             取消
-          </a-button>
+          </Button>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -179,7 +179,7 @@ import {
 } from '@/api/device/model';
 import { getExportModelColumns } from './data';
 import dayjs from 'dayjs';
-
+import { Button } from '@/components/Button'
 const route = useRoute();
 const modelId = ref(route.params.modelId ? parseInt(route.params.modelId as string) : 0);
 

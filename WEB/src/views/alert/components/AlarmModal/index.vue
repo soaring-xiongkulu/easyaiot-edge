@@ -30,8 +30,8 @@
           <FormItem label="检测区域" name="region" v-bind=validateInfos.region>
             <Input v-model:value="modelRef.region"/>
           </FormItem>
-          <FormItem label="告警图片" name="image_path" v-bind=validateInfos.image_path>
-            <Input v-model:value="modelRef.image_path"/>
+          <FormItem label="告警图片（MinIO）" name="image_url" v-bind=validateInfos.image_url>
+            <Input v-model:value="modelRef.image_url"/>
           </FormItem>
           <FormItem label="告警录像" name="record_path" v-bind=validateInfos.record_path>
             <Input v-model:value="modelRef.record_path"/>
@@ -67,7 +67,7 @@ const modelRef = reactive({
   time: null,
   device_id: null,
   device_name: null,
-  image_path: null,
+  image_url: null,
   record_path: null,
 });
 

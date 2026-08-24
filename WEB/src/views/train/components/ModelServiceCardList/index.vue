@@ -226,16 +226,11 @@ const getUsageColor = (percent) => {
 const toggleServiceStatus = async (item) => {
   try {
     state.loading = true;
-    const sid = item.id;
-    if (sid == null) {
-      createMessage.error('缺少部署服务 ID');
-      return;
-    }
     if (item.status === 'running') {
-      await stopDeployService(sid);
+      await stopDeployService(item.id);
       createMessage.success('服务已停止');
     } else {
-      await startDeployService(sid);
+      await startDeployService(item.id);
       createMessage.success('服务已启动');
     }
     await fetch();

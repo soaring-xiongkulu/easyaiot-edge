@@ -10,7 +10,7 @@ import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, TableAction, useTable } from '@/components/Table'
 import type { RoleExportReqVO } from '@/api/system/role'
 import { deleteRole, exportRole, getRolePage } from '@/api/system/role'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemRole' })
 
 const { t } = useI18n()
@@ -73,12 +73,12 @@ async function handleDelete(record: Recordable) {
   <div>
     <BasicTable @register="registerTable">
       <template #toolbar>
-        <a-button v-auth="['system:role:create']" type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+        <Button v-auth="['system:role:create']" type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
           {{ t('action.create') }}
-        </a-button>
-        <a-button v-auth="['system:role:create']" :pre-icon="IconEnum.EXPORT" @click="handleExport">
+        </Button>
+        <Button v-auth="['system:role:create']" :preIcon="IconEnum.EXPORT" @click="handleExport">
           {{ t('action.export') }}
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">

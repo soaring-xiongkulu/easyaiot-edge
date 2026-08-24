@@ -32,7 +32,7 @@
 
                   <h6 class="export-card-title">
                     <a>
-                      {{ item.model_name || `模型${item.model_id}` }}{{ item.model_version ? `（v${item.model_version}）` : '' }}
+                      {{ item.model_name || `模型${item.model_id}` }}{{ item.model_version ? `（${formatModelVersionDisplay(item.model_version)}）` : '' }}
                     </a>
                   </h6>
 
@@ -86,6 +86,7 @@ import {BasicForm, useForm} from '@/components/Form';
 import {propTypes} from '@/utils/propTypes';
 import {isFunction} from '@/utils/is';
 import {DeleteOutlined, DownloadOutlined} from '@ant-design/icons-vue';
+import { formatModelVersionDisplay } from '../../utils/modelVersionUtils';
 
 defineOptions({name: 'ModelExportCardList'})
 

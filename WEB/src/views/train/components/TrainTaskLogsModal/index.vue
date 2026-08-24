@@ -31,12 +31,12 @@
 </template>
 
 <script setup lang="ts">
-import {onMounted, onUnmounted, reactive, ref, watch} from 'vue'
+import {onMounted, onUnmounted, reactive, ref, watch, computed} from 'vue'
 import {BasicModal, useModalInner} from '@/components/Modal'
+import {getTrainLogs} from '@/api/device/train'
 
 const state = reactive({
   taskId: '',
-  modelId: '',
   taskName: '',
   pollingInterval: null as number | null
 });
@@ -47,8 +47,7 @@ const emit = defineEmits(['close', 'success']);
 const [registerModal, {closeModal}] = useModalInner((data) => {
   const {record} = data;
   state.taskId = record.id;
-  state.modelId = record.model_id;
-  state.taskName = record.model_name;
+  state.taskName = record.name || record.task_name || 'train';
   if (record.id) {
     startPolling();
   }
@@ -60,14 +59,47 @@ const handleCancel = () => {
   emit('close'); // 通知父组件销毁
 };
 
-// 日志文本（边缘端无训练接口，仅展示说明）
-const logs = ref<string>('')
+// 日志数据和过滤
+const logs = ref<Array<any>>([])
+const filterLevel = ref('all')
 const logContainer = ref<HTMLElement | null>(null)
 
-// 加载日志数据（边缘端已移除训练接口）
+// 过滤后的日志
+const filteredLogs = computed(() => {
+  if (filterLevel.value === 'all') {
+    return logs.value;
+  }
+  return logs.value.filter(log => log.level === filterLevel.value);
+});
+
+// 格式化时间戳
+const formatTimestamp = (timestamp) => {
+  if (!timestamp) return '';
+  return new Date(timestamp).toLocaleString();
+};
+
+// 加载日志数据
 const loadLogs = async () => {
-  logs.value = '边缘端已移除模型训练，不再提供训练日志。'
-  scrollToBottom()
+  try {
+    if (!state.taskId) return
+
+    const data = await getTrainLogs(Number(state.taskId))
+
+    // 根据后端返回的数据结构调整
+    if (data) {
+      logs.value = data;
+    }
+
+    // 滚动到底部
+    scrollToBottom()
+  } catch (error: any) {
+    console.error('加载日志失败:', error)
+    logs.value = [{
+      timestamp: new Date().toISOString(),
+      level: 'error',
+      message: '加载日志失败: ' + error.message
+    }]
+  }
 }
 
 // 刷新日志
@@ -107,8 +139,7 @@ watch(() => logs.value, () => {
   scrollToBottom()
 }, {deep: true})
 
-// 监听modelId变化
-watch(() => state.modelId, (newId) => {
+watch(() => state.taskId, (newId) => {
   if (newId) {
     stopPolling();
     startPolling();
@@ -117,7 +148,7 @@ watch(() => state.modelId, (newId) => {
 
 // 组件挂载时加载日志
 onMounted(() => {
-  if (state.modelId) {
+  if (state.taskId) {
     startPolling();
   }
 })
@@ -125,7 +156,7 @@ onMounted(() => {
 // 组件卸载时重置状态
 onUnmounted(() => {
   stopPolling();
-  logs.value = '';
+  logs.value = [];
   if (logContainer.value) {
     logContainer.value.scrollTop = 0;
   }

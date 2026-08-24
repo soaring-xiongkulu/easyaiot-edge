@@ -58,6 +58,7 @@ export function getFormConfig(): Partial<FormProps> {
         label: `状态`,
         component: 'Select',
         componentProps: {
+          allowClear: true,
           options: [
             {label: '未部署', value: 0},
             {label: '已部署', value: 1},

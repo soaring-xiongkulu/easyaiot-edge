@@ -72,13 +72,13 @@
               <div class="stream-container">
                 <video controls :src="record.stream_output_url" autoplay muted />
                 <div class="stream-controls">
-                  <a-button @click="toggleStream">
+                  <Button @click="toggleStream">
                     {{ isPlaying ? '暂停' : '播放' }}
-                  </a-button>
-                  <a-button @click="downloadResult">
+                  </Button>
+                  <Button @click="downloadResult">
                     <template #icon><DownloadOutlined /></template>
                     下载结果
-                  </a-button>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -123,7 +123,7 @@
 import { ref, computed, watch } from 'vue';
 import { BasicModal, useModalInner } from '@/components/Modal';
 import { DownloadOutlined } from '@ant-design/icons-vue';
-
+import { Button } from '@/components/Button'
 const props = defineProps({
   record: {
     type: Object,

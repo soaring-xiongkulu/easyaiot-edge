@@ -139,6 +139,7 @@ import {
   getDeployServiceReplicas
 } from '@/api/device/model';
 import {getFormConfig} from '../DeployService/Data';
+import { formatModelVersionDisplay } from '../../utils/modelVersionUtils';
 
 defineOptions({name: 'DeployServiceCardList'})
 
@@ -360,9 +361,7 @@ function getModelTitleWithVersion(item: any): string {
   const version = item.model_version || item.version || '';
   
   if (version) {
-    // 如果版本号没有 v 前缀，则添加
-    const versionText = version.startsWith('v') ? version : `v${version}`;
-    return `${modelName} ${versionText}`;
+    return `${modelName} ${formatModelVersionDisplay(version)}`;
   }
   
   return modelName;

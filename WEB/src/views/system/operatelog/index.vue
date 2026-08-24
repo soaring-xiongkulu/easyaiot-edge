@@ -8,7 +8,7 @@ import { BasicTable, TableAction, useTable } from '@/components/Table'
 import type { OperateLogPageReqVO } from '@/api/system/operatelog'
 import { exportOperateLog, getOperateLogPage } from '@/api/system/operatelog'
 import { useModal } from '@/components/Modal'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemOperateLog' })
 
 const { t } = useI18n()
@@ -51,9 +51,9 @@ function handleShowInfo(record: Recordable) {
   <div>
     <BasicTable @register="registerTable">
       <template #toolbar>
-        <a-button :pre-icon="IconEnum.EXPORT" @click="handleExport">
+        <Button :preIcon="IconEnum.EXPORT" @click="handleExport">
           {{ t('action.export') }}
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">

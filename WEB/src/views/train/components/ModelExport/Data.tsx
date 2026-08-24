@@ -1,4 +1,5 @@
 import {BasicColumn, FormProps} from "@/components/Table";
+import { formatModelVersionDisplay } from '../../utils/modelVersionUtils';
 
 export function getBasicColumns(): BasicColumn[] {
   return [
@@ -20,7 +21,7 @@ export function getBasicColumns(): BasicColumn[] {
       customRender: ({record}) => {
         const modelName = record.model_name || `模型${record.model_id}`;
         const version = record.model_version;
-        return version ? `${modelName}（v${version}）` : modelName;
+        return version ? `${modelName}（${formatModelVersionDisplay(version)}）` : modelName;
       },
     },
     {

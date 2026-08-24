@@ -9,7 +9,7 @@ import { useModal } from '@/components/Modal'
 import { IconEnum } from '@/enums/appEnum'
 import { BasicTable, TableAction, useTable } from '@/components/Table'
 import { deleteDictType, getDictTypePage } from '@/api/system/dict/type'
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SystemDict' })
 
 const { t } = useI18n()
@@ -59,9 +59,9 @@ async function handleDelete(record: Recordable) {
   <div class="flex">
     <BasicTable class="w-1/2" @register="registerTable" @row-click="handleRowClick">
       <template #toolbar>
-        <a-button v-auth="['system:dict:create']" type="primary" :pre-icon="IconEnum.ADD" @click="handleCreate">
+        <Button v-auth="['system:dict:create']" type="primary" :preIcon="IconEnum.ADD" @click="handleCreate">
           {{ t('action.create') }}
-        </a-button>
+        </Button>
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">
