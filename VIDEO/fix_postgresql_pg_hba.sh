@@ -28,7 +28,7 @@ NC='\033[0m' # No Color
 POSTGRES_CONTAINER="postgres-server"
 POSTGRES_USER="postgres"
 POSTGRES_PASSWORD="iot45722414822"
-POSTGRES_DB="iot-edge-video20"
+POSTGRES_DB="iot-video20"
 
 # 从环境变量或.env文件获取配置
 if [ -f .env ]; then

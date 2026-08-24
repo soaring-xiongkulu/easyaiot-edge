@@ -30,6 +30,9 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/module_update_helpers.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/module_update_helpers.sh"
 
 # 打印带颜色的消息
 print_info() {
@@ -47,6 +50,12 @@ print_warning() {
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
+
+ensure_cpp_runtime() {
+    # mac 上脚本会跳过编译并提示；保持与 Linux 入口一致
+    bash "${EASYAIOT_ROOT}/VIDEO/scripts/ensure_runtime_cpp.sh" install || true
+}
+
 
 # 检查命令是否存在
 check_command() {
@@ -146,6 +155,21 @@ create_directories() {
     print_success "目录创建完成"
 }
 
+# 检查人脸特征提取模型（face_rec.onnx，约 167MB；安装时不自动下载，请登录 WEB 人脸库页下载）
+download_face_rec_model() {
+    local target="${SCRIPT_DIR}/face_rec.onnx"
+    if [ -d "$target" ]; then
+        print_warning "face_rec.onnx 误为目录（Docker 文件卷导致），正在清理..."
+        rm -rf "$target"
+    fi
+    if [ -f "$target" ] && [ "$(stat -c%s "$target" 2>/dev/null || stat -f%z "$target" 2>/dev/null || echo 0)" -ge 10485760 ]; then
+        print_success "人脸特征模型 face_rec.onnx 已存在"
+        return 0
+    fi
+    print_warning "人脸特征模型 face_rec.onnx 未安装（约 167MB），安装过程不自动下载"
+    print_info "请登录系统后进入「摄像头 → 人脸库」，按页面提示下载并安装模型"
+}
+
 # 清理 VIDEO 服务的 compose 容器网络缓存
 clean_compose_cache() {
     print_info "清理 VIDEO 服务的 compose 容器网络缓存..."
@@ -234,7 +258,10 @@ create_env_file() {
             print_info "自动配置中间件连接信息（使用host网络模式，通过localhost访问中间件）..."
             
             # 更新数据库连接（使用localhost，因为使用host网络模式）
-            sed -i '' 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-edge-video20|' .env.docker
+            sed -i '' 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-video20|' .env.docker
+            
+            # 更新Nacos配置（使用localhost，因为使用host网络模式）
+            sed -i '' 's|^NACOS_SERVER=.*|NACOS_SERVER=localhost:8848|' .env.docker
             
             # 更新MinIO配置（使用localhost，因为使用host网络模式）
             sed -i '' 's|^MINIO_ENDPOINT=.*|MINIO_ENDPOINT=localhost:9000|' .env.docker
@@ -249,6 +276,8 @@ create_env_file() {
             # 更新TDengine配置（使用localhost，因为使用host网络模式）
             sed -i '' 's|^TDENGINE_HOST=.*|TDENGINE_HOST=localhost|' .env.docker
             
+            # 更新Nacos密码
+            sed -i '' 's|^NACOS_PASSWORD=.*|NACOS_PASSWORD=basiclab@iot78475418754|' .env.docker
             
             print_success "中间件连接信息已自动配置（使用host网络模式）"
             print_info "注意：使用host网络模式后，容器可以直接访问宿主机局域网，支持ONVIF摄像头发现"
@@ -263,8 +292,14 @@ create_env_file() {
         
         # 检查并更新数据库连接（如果还是旧的服务名，改为localhost）
         if grep -q "DATABASE_URL=.*PostgresSQL" .env.docker || grep -q "DATABASE_URL=.*postgres-server" .env.docker; then
-            sed -i '' 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-edge-video20|' .env.docker
+            sed -i '' 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-video20|' .env.docker
             print_info "已更新数据库连接为 localhost:5432（host网络模式）"
+        fi
+        
+        # 检查并更新Nacos配置（如果还是IP地址或旧的服务名，改为localhost）
+        if grep -q "NACOS_SERVER=.*14\.18\.122\.2" .env.docker || grep -q "NACOS_SERVER=.*Nacos" .env.docker || grep -q "NACOS_SERVER=.*nacos-server" .env.docker; then
+            sed -i '' 's|^NACOS_SERVER=.*|NACOS_SERVER=localhost:8848|' .env.docker
+            print_info "已更新Nacos连接为 localhost:8848（host网络模式）"
         fi
         
         # 检查并更新MinIO配置（如果还是旧的服务名，改为localhost）
@@ -303,14 +338,20 @@ install_service() {
     clean_compose_cache
     check_network
     create_directories
+    download_face_rec_model
     create_env_file
+    ensure_cpp_runtime
     
-    print_info "构建 Docker 镜像（减少输出）..."
-    # 使用 --progress=plain 减少构建输出
-    if echo "$COMPOSE_CMD" | grep -q "docker compose"; then
-        $COMPOSE_CMD build --progress=plain 2>&1 | grep -E "(Step|Successfully|ERROR|WARNING|built)" || true
+    if [ "${EASYAIOT_SKIP_BUILD:-0}" = "1" ] && docker image inspect video-service:latest >/dev/null 2>&1; then
+        print_success "镜像已从远程拉取 (video-service:latest)，跳过构建"
     else
-        $COMPOSE_CMD build --progress=plain 2>&1 | grep -E "(Step|Successfully|ERROR|WARNING|built)" || true
+        print_info "构建 Docker 镜像（减少输出）..."
+        # 使用 --progress=plain 减少构建输出
+        if echo "$COMPOSE_CMD" | grep -q "docker compose"; then
+            $COMPOSE_CMD build --progress=plain 2>&1 | grep -E "(Step|Successfully|ERROR|WARNING|built)" || true
+        else
+            $COMPOSE_CMD build --progress=plain 2>&1 | grep -E "(Step|Successfully|ERROR|WARNING|built)" || true
+        fi
     fi
     
     print_info "启动服务..."
@@ -454,15 +495,27 @@ clean_service() {
 # 更新服务
 update_service() {
     print_info "更新服务..."
+    ensure_cpp_runtime
     check_macos
     check_docker
     check_docker_compose
     clean_compose_cache
     check_network
-    
+
+    if easyaiot_update_should_recreate_only video-service:latest; then
+        if echo "$COMPOSE_CMD" | grep -q "docker compose"; then
+            $COMPOSE_CMD up -d --force-recreate --quiet-pull 2>&1 | grep -v "^$" || true
+        else
+            $COMPOSE_CMD up -d --force-recreate 2>&1 | grep -v "^$" || true
+        fi
+        print_success "服务更新完成"
+        check_status
+        return 0
+    fi
+
     print_info "拉取最新代码..."
-    git pull || print_warning "Git pull 失败，继续使用当前代码"
-    
+    easyaiot_git_pull_ff_only
+
     print_info "重新构建镜像（减少输出）..."
     # 使用 --progress=plain 减少构建输出
     if echo "$COMPOSE_CMD" | grep -q "docker compose"; then

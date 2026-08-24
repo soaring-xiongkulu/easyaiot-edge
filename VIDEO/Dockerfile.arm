@@ -1,3 +1,4 @@
+# BuildKit 内置前端，支持 RUN --mount
 # 使用PyTorch ARM架构构建器镜像作为基础镜像
 # 注意：manylinuxaarch64-builder 是基于 CentOS 的构建器镜像
 # 如果 cuda12.9 版本不存在，可以尝试 cuda12.8 或其他可用版本
@@ -21,6 +22,50 @@ FROM base AS dependencies
 # 注意：如果文件不存在，构建脚本会创建一个空占位符文件以避免构建失败
 # Dockerfile 会在 RUN 命令中检查文件大小，如果文件为空或很小则跳过使用
 COPY ffmpeg-master-latest-linuxarm64-gpl.tar.xz* /tmp/
+
+# 镜像源配置（通过 --build-arg 传入）
+# 注意：清华源已不完整同步 AlmaLinux 8 aarch64（AppStream repomd 404），默认使用华为云
+ARG YUM_MIRROR_URL=https://mirrors.huaweicloud.com
+
+# 配置 yum 镜像源
+# manylinuxaarch64-builder 基于 AlmaLinux 8，保留官方 .repo，仅切换 mirrorlist→baseurl
+# 若指定镜像缺少当前架构元数据，则自动回退到其他可用国内源 / 官方源
+RUN set -ex && \
+    mkdir -p /etc/yum.repos.d/backup && \
+    cp -a /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true && \
+    if [ -n "${YUM_MIRROR_URL}" ] && [ -f /etc/almalinux-release ]; then \
+        ARCH="$(uname -m)" && \
+        REL="$(awk -F= '/^VERSION_ID=/{gsub(/"/,""); print $2}' /etc/os-release | cut -d. -f1)" && \
+        CANDIDATES="${YUM_MIRROR_URL} https://mirrors.huaweicloud.com https://mirrors.aliyun.com https://mirrors.cloud.tencent.com https://mirror.nju.edu.cn https://repo.almalinux.org" && \
+        SELECTED="" && \
+        for m in ${CANDIDATES}; do \
+            PROBE="${m}/almalinux/${REL}/AppStream/${ARCH}/os/repodata/repomd.xml"; \
+            if curl -fsI --connect-timeout 5 --max-time 15 "${PROBE}" >/dev/null 2>&1; then \
+                SELECTED="$m"; \
+                echo "选用可用 AlmaLinux YUM 源: ${SELECTED}"; \
+                break; \
+            fi; \
+            echo "跳过不可用源: ${m}"; \
+        done && \
+        if [ -z "${SELECTED}" ]; then \
+            echo "警告：候选镜像均不可用，保留官方 mirrorlist"; \
+        else \
+            for repo in /etc/yum.repos.d/almalinux*.repo; do \
+                [ -f "${repo}" ] || continue; \
+                sed -e 's|^mirrorlist=|#mirrorlist=|g' \
+                    -e "s|^#[[:space:]]*baseurl=https://repo.almalinux.org/almalinux|baseurl=${SELECTED}/almalinux|g" \
+                    -e "s|^baseurl=https://repo.almalinux.org/almalinux|baseurl=${SELECTED}/almalinux|g" \
+                    -i "${repo}"; \
+            done && \
+            echo "AlmaLinux YUM 镜像源已切换到: ${SELECTED}"; \
+        fi; \
+    elif [ -n "${YUM_MIRROR_URL}" ]; then \
+        echo "警告：非 AlmaLinux 基础镜像，跳过 yum 镜像切换，使用默认源"; \
+    else \
+        echo "YUM_MIRROR_URL 为空，使用默认 yum 源"; \
+    fi && \
+    yum clean all && \
+    yum makecache
 
 # manylinuxaarch64-builder 基于 CentOS，使用 yum 包管理器
 # 安装系统依赖包（包含视频处理所需的ffmpeg和相关库）
@@ -70,39 +115,58 @@ RUN set -ex && \
         echo "ffmpeg 已从 EPEL 仓库安装"; \
     else \
         echo "ffmpeg 不在 EPEL 仓库中，使用预编译静态二进制文件安装（官方推荐方法）..." && \
-        # 使用预编译静态二进制文件（静态二进制文件是自包含的，不需要额外的依赖库）
         cd /tmp && \
-        # 优先检查本地是否有 ffmpeg 文件（从构建上下文复制）
-        # 检查文件是否存在且大小大于 1MB（避免使用占位符文件）
-        if [ -f "ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ] && [ $(stat -f%z "ffmpeg-master-latest-linuxarm64-gpl.tar.xz" 2>/dev/null || stat -c%s "ffmpeg-master-latest-linuxarm64-gpl.tar.xz" 2>/dev/null || echo 0) -gt 1048576 ]; then \
-            echo "使用本地 ffmpeg 文件（从构建上下文）..." && \
+        INSTALLED=0; \
+        if [ -f ffmpeg-master-latest-linuxarm64-gpl.tar.xz ] && [ $(stat -c%s ffmpeg-master-latest-linuxarm64-gpl.tar.xz 2>/dev/null || echo 0) -gt 1048576 ]; then \
+            echo "使用 COPY 传入的离线 ffmpeg 包..." && \
             tar -xf ffmpeg-master-latest-linuxarm64-gpl.tar.xz && \
             cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffmpeg /usr/local/bin/ && \
             cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffprobe /usr/local/bin/ && \
             chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
-            rm -rf /tmp/ffmpeg-* && \
-            echo "ffmpeg 已从本地文件安装"; \
-        # 如果本地文件不存在，尝试从 GitHub BtbN/FFmpeg-Builds 下载 ARM64 版本（支持 ARM64）
-        elif wget -q --spider "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" 2>/dev/null; then \
-            echo "从 GitHub BtbN/FFmpeg-Builds 下载 ARM64 版本..." && \
-            wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" && \
-            tar -xf ffmpeg-master-latest-linuxarm64-gpl.tar.xz && \
-            cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffmpeg /usr/local/bin/ && \
-            cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffprobe /usr/local/bin/ && \
-            chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
-            rm -rf /tmp/ffmpeg-* && \
-            echo "ffmpeg 已从 GitHub BtbN/FFmpeg-Builds 安装"; \
-        # 备用方案：尝试从 johnvansickle.com 下载（如果有 ARM64 版本）
-        elif wget -q --spider "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" 2>/dev/null; then \
-            echo "从 johnvansickle.com 下载 ARM64 静态二进制文件..." && \
-            wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" && \
-            tar -xf ffmpeg-release-arm64-static.tar.xz && \
-            cp ffmpeg-*-static/ffmpeg /usr/local/bin/ && \
-            cp ffmpeg-*-static/ffprobe /usr/local/bin/ && \
-            chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
-            rm -rf /tmp/ffmpeg-* && \
-            echo "ffmpeg 已从 johnvansickle.com 安装"; \
+            echo "ffmpeg 已从离线包安装" && \
+            INSTALLED=1; \
         else \
+            rm -f ffmpeg-master-latest-linuxarm64-gpl.tar.xz; \
+        fi; \
+        if [ "$INSTALLED" = "0" ]; then \
+        echo "尝试从 GitHub BtbN/FFmpeg-Builds 下载 ARM64 版本..." && \
+        { if wget -q -L --timeout=120 \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz" 2>/dev/null; then \
+            if [ -f ffmpeg-master-latest-linuxarm64-gpl.tar.xz ] && [ $(stat -c%s ffmpeg-master-latest-linuxarm64-gpl.tar.xz 2>/dev/null || echo 0) -gt 1048576 ]; then \
+                tar -xf ffmpeg-master-latest-linuxarm64-gpl.tar.xz && \
+                cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffmpeg /usr/local/bin/ && \
+                cp ffmpeg-master-latest-linuxarm64-gpl/bin/ffprobe /usr/local/bin/ && \
+                chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+                echo "ffmpeg 已从 GitHub BtbN/FFmpeg-Builds 安装" && \
+                INSTALLED=1; \
+            else \
+                echo "GitHub 下载文件无效，尝试下一方案..."; \
+            fi; \
+        else \
+            echo "GitHub 下载失败，尝试下一方案..."; \
+        fi; } || true; \
+        fi; \
+        # 方案2：从 johnvansickle.com 下载 ARM64 静态二进制文件
+        if [ "$INSTALLED" = "0" ]; then \
+            echo "尝试从 johnvansickle.com 下载 ARM64 静态二进制文件..." && \
+            { if wget -q -L --timeout=120 \
+                "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" 2>/dev/null; then \
+                if [ -f ffmpeg-release-arm64-static.tar.xz ] && [ $(stat -c%s ffmpeg-release-arm64-static.tar.xz 2>/dev/null || echo 0) -gt 1048576 ]; then \
+                    tar -xf ffmpeg-release-arm64-static.tar.xz && \
+                    cp ffmpeg-*-static/ffmpeg /usr/local/bin/ && \
+                    cp ffmpeg-*-static/ffprobe /usr/local/bin/ && \
+                    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+                    echo "ffmpeg 已从 johnvansickle.com 安装" && \
+                    INSTALLED=1; \
+                else \
+                    echo "johnvansickle 下载文件无效，尝试下一方案..."; \
+                fi; \
+            else \
+                echo "johnvansickle 下载失败，尝试下一方案..."; \
+            fi; } || true; \
+        fi; \
+        # 方案3：从源码编译（最后手段）
+        if [ "$INSTALLED" = "0" ]; then \
             echo "预编译版本不可用，使用简化配置从源码编译（不启用所有编解码器）..." && \
             yum install -y nasm yasm && \
             wget -q https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.bz2 && \
@@ -121,8 +185,13 @@ RUN set -ex && \
             ldconfig && \
             cd / && \
             rm -rf /tmp/ffmpeg-6.1.1* && \
-            echo "ffmpeg 已从源码编译安装（简化配置）"; \
+            echo "ffmpeg 已从源码编译安装（简化配置）" && \
+            INSTALLED=1; \
         fi; \
+        if [ "$INSTALLED" = "0" ]; then \
+            echo "ERROR: 所有 ffmpeg 安装方案均失败" && exit 1; \
+        fi; \
+        rm -rf /tmp/ffmpeg-*; \
     fi \
         && \
     # 清理缓存
@@ -165,13 +234,45 @@ RUN set -ex && \
 # ======================= 第三阶段：Python依赖安装 =======================
 FROM python-env AS python-deps
 
-# 复制requirements文件（利用Docker缓存层）
-COPY requirements.txt .
+# ARM 构建镜像无预装 PyTorch，使用本地全量 requirements.txt
+COPY requirements.txt requirements-base.txt ./
+COPY --from=pip-wheels . /opt/offline-pip
+ARG OFFLINE_MODE=0
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
-# 升级 pip 并安装 Python 依赖
-RUN set -ex && \
-    pip3 install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip3 install -r requirements.txt --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN --mount=type=bind,from=pip-cache,source=.,target=/mnt/pip-cache,rw \
+    --mount=type=cache,target=/tmp/pip-wheels-build,id=pip-wheels-build-video-arm \
+    set -ex && \
+    mkdir -p /mnt/pip-cache/http /tmp/pip-wheels-build && \
+    rm -rf /mnt/pip-cache/wheels && \
+    ln -sfn /tmp/pip-wheels-build /mnt/pip-cache/wheels && \
+    sed -i 's/onnxruntime-gpu/onnxruntime/g' requirements.txt requirements-base.txt && \
+    export PIP_CACHE_DIR=/mnt/pip-cache && \
+    pip3 install --upgrade pip -i "${PIP_INDEX_URL}" && \
+    if [ -n "$(find /opt/offline-pip -maxdepth 1 -type f 2>/dev/null)" ]; then \
+        py_tag="$(python3 -c 'import sys; print("cp{}{}".format(sys.version_info.major, sys.version_info.minor))')" && \
+        if grep -Eq '^torch([<>= ].*)?$' requirements.txt && ls /opt/offline-pip/torch-*.whl >/dev/null 2>&1; then \
+            if ! ls /opt/offline-pip/torch-*-"${py_tag}"-*.whl >/dev/null 2>&1; then \
+                echo "离线 wheel ABI 不匹配: ${py_tag}" && exit 1; \
+            fi; \
+        fi && \
+        if [ "$OFFLINE_MODE" = "1" ]; then \
+            echo "OFFLINE_MODE=1：仅使用 pip-wheels 离线安装..." && \
+            pip3 install -r requirements.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        elif pip3 install -r requirements.txt --dry-run --no-index --find-links /opt/offline-pip --prefer-binary >/dev/null 2>&1; then \
+            echo "pip-wheels 可覆盖全部依赖，离线安装..." && \
+            pip3 install -r requirements.txt --no-index --find-links /opt/offline-pip --prefer-binary; \
+        else \
+            echo "pip-wheels 与 requirements 未完全匹配，使用清华源 + find-links 混合安装..." && \
+            pip3 install -r requirements.txt --find-links /opt/offline-pip --prefer-binary -i "${PIP_INDEX_URL}"; \
+        fi; \
+    elif [ "$OFFLINE_MODE" = "1" ]; then \
+        echo "OFFLINE_MODE=1 且无 pip-wheels" && exit 1; \
+    else \
+        echo "使用清华源 + 宿主机 pip-cache 在线安装..." && \
+        pip3 install -r requirements.txt -i "${PIP_INDEX_URL}"; \
+    fi
 
 # ======================= 第四阶段：应用部署 =======================
 FROM python-deps AS runtime

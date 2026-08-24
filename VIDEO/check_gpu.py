@@ -11,6 +11,11 @@ import subprocess
 import json
 from typing import Dict, Any
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+import app.utils.nvidia_lib_path  # noqa: F401
+
 def setup_logging():
     """配置日志"""
     logging.basicConfig(

@@ -1,9 +1,18 @@
+# 构建期依赖缓存（运行时无需挂载）：
+#   项目根 .build-cache/video/pip-cache、pip-wheels — docker build 时 bind mount（见 install_linux*.sh）
+#   目录由 install 脚本预创建，默认属主 UID/GID=1000（BUILD_CACHE_UID 可覆盖）
 services:
   video-service:
     image: video-service:latest
     container_name: video-service
     user: root
-    runtime: nvidia
+    # runtime: nvidia  # 由 install_linux.sh 检测到 GPU 后自动启用
+
+    # 业务源码经卷挂载（见下方 volumes 的 ./:/app）后，用 sh 调用入口脚本，
+    # 这样宿主机 docker-entrypoint.sh 即使没有可执行位也能正常启动。
+    # 注意：覆盖 entrypoint 会重置镜像 CMD，故必须同时显式声明 command。
+    entrypoint: ["/bin/sh", "/app/docker-entrypoint.sh"]
+    command: ["python", "run.py"]
 
     # 环境变量文件（用于Docker部署）
     env_file:
@@ -15,6 +24,9 @@ services:
 
     # 数据卷挂载
     volumes:
+      # 业务源码（实现「仅改代码、依赖不变」时 update 免重建镜像：git pull 后重启进程即生效）
+      # 下方更具体的子目录挂载（./data 等）会按路径深度优先覆盖此挂载，互不冲突
+      - ./:/app
       # 数据目录（包含数据集、模型、推理结果、上传文件）
       - ./data:/app/data
       # 静态文件目录
@@ -23,37 +35,47 @@ services:
       - ./temp_uploads:/app/temp_uploads
       # 模型文件目录（如果存在）
       - ./model:/app/model
-      # 告警图片目录（与iot-sink服务共享，用于大模型实时分析等服务的图片上传）
-      - ./alert_images:/app/alert_images
-      # SRS录像目录（与SRS服务共享，用于访问SRS生成的录像文件）
-      # 重要说明：
-      # 1. SRS的docker-compose中挂载的是 /data:/data:rw（宿主机路径为 /data）
-      # 2. SRS录像实际存储在 /data/playbacks 目录下（由SRS配置的dvr_path决定）
-      # 3. 这里挂载相同的宿主机路径 /data 到容器的 /data，确保VIDEO服务可以访问SRS生成的录像文件
-      # 4. 在容器内，SRS录像文件位于 /data/playbacks/live/{device_id}/YYYY/MM/DD/*.flv
-      # 5. 应用数据目录在 /app/data，SRS录像目录在 /data，两者是不同的挂载点
-      - /data:/data:rw
+      # face_rec.onnx 经上方 ./:/app 卷持久化，勿单独挂载文件路径：
+      # 宿主机不存在时 Docker 会把 ./face_rec.onnx 建成目录，导致 WEB 下载后 os.replace 报 Errno 21
+      # NFS 共享媒体根（唯一存储；生产 /mnt/easyaiot-media，开发可设 EASYAIOT_MEDIA_ROOT=/tmp/easyaiot-nfs-mount）
+      - ${EASYAIOT_MEDIA_ROOT:-/mnt/easyaiot-media}:/mnt/easyaiot-media:rw
+      # SRS Hook 契约路径 /data/playbacks → 映射 NFS playbacks
+      - ${EASYAIOT_MEDIA_ROOT:-/mnt/easyaiot-media}/playbacks:/data/playbacks:rw
       # 环境变量配置文件（用于Docker部署，使用.env.docker）
       - ./.env.docker:/app/.env:ro
+      # edge/mini：安装包 flat 模型种子（历史目录名 .scripts/minio，仅本地文件，不启 MinIO）
+      - ../deploy/model-seed-data:/model-seed-data:ro
 
     # 环境变量
     environment:
       # Python环境
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
+      # 源码经 ./:/app 卷挂载且容器以 root 运行，禁止写 .pyc，避免 root 属主的
+      # __pycache__ 污染宿主机源码树（否则可能干扰后续 git 操作）
+      - PYTHONDONTWRITEBYTECODE=1
       # Flask配置
       - FLASK_RUN_PORT=${FLASK_RUN_PORT:-6000}
       - FLASK_RUN_HOST=${FLASK_RUN_HOST:-0.0.0.0}
       - DEBUG=${DEBUG:-False}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-[*]}
       # 数据库配置（使用localhost，因为使用host网络模式，中间件端口已映射到宿主机）
-      - DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-edge-video20
+      - DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-video20
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-please-change-this-to-a-random-string}
+      # 流地址 secure_link 签名密钥 STREAM_TICKET_SECRET 由挂载的 .env.docker 提供（容器内 /app/.env，
+      # 经 dotenv 加载进 os.environ），无需在此重复；密钥须与 WEB/conf/nginx.conf 的 $stream_secret 一致。
+      # Nacos配置（使用localhost，因为使用host网络模式）
+      - NACOS_SERVER=${NACOS_SERVER:-localhost:8848}
+      - NACOS_NAMESPACE=${NACOS_NAMESPACE:-}
+      - NACOS_USERNAME=${NACOS_USERNAME:-nacos}
+      - NACOS_PASSWORD=${NACOS_PASSWORD:-basiclab@iot78475418754}
+      - SERVICE_NAME=${SERVICE_NAME:-video-server}
       # Pod IP配置（容器内会自动获取，也可手动指定）
       - POD_IP=${POD_IP:-}
-      # 本地对象存储根目录
-      - LOCAL_STORAGE_ROOT=${LOCAL_STORAGE_ROOT:-/app/data/local_storage}
-      - RECORD_ARCHIVE_BUCKET=${RECORD_ARCHIVE_BUCKET:-record-archive}
-      - SNAP_ARCHIVE_BUCKET=${SNAP_ARCHIVE_BUCKET:-snap-archive}
+      # MinIO对象存储配置（使用localhost，因为使用host网络模式）
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-localhost:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-basiclab@iot975248395}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
       # Redis配置（使用localhost，因为使用host网络模式）
       - REDIS_HOST=${REDIS_HOST:-localhost}
       - REDIS_PORT=${REDIS_PORT:-6379}
@@ -62,13 +84,25 @@ services:
       # 如果Kafka运行在宿主机上，使用localhost:9092
       # 如果Kafka运行在其他机器上，使用宿主机IP，例如：192.168.1.100:9092
       - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      # POST 定制后处理（v1.9：Nacos 发现优先；POST_BASE_URL 仅兜底）
+      - POST_BASE_URL=${POST_BASE_URL:-http://127.0.0.1:8089}
+      - POST_NACOS_SERVICE=${POST_NACOS_SERVICE:-easyaiot-post}
+      - POST_ADMIN_TOKEN=${POST_ADMIN_TOKEN:-}
+      - POST_ENABLED=${POST_ENABLED:-true}
+      - POST_FAILOVER_OPEN=${POST_FAILOVER_OPEN:-true}
+      - POST_HEALTH_INTERVAL_SEC=${POST_HEALTH_INTERVAL_SEC:-5}
+      - POST_HEALTH_FAIL_THRESHOLD=${POST_HEALTH_FAIL_THRESHOLD:-3}
+      - INFER_HEARTBEAT_SEC=${INFER_HEARTBEAT_SEC:-60}
       # TDengine配置（使用localhost，因为使用host网络模式）
       - TDENGINE_HOST=${TDENGINE_HOST:-localhost}
       - TDENGINE_PORT=${TDENGINE_PORT:-6030}
+      # 告警图片落盘（与 EASYAIOT_MEDIA_ROOT 挂载一致）
+      - ALERT_IMAGES_DIR=${ALERT_IMAGES_DIR:-/mnt/easyaiot-media/alert_images}
+      # IOT_SINK_* / MINIO_ENABLED / ALERT_USE_DIRECT_PERSIST / DVR_LOCAL_PERSIST
+      # 一律由 env_file(.env.docker) 提供，避免此处硬编码覆盖 edge 本地落盘配置
       # 视频服务特有配置
       - MODEL_AI_PUSH_URL=${MODEL_AI_PUSH_URL:-pro.basiclab.top:1935}
       - CAMERA_ONLINE_INTERVAL=${CAMERA_ONLINE_INTERVAL:-10}
-      - CAMERA_DISCOVER_INTERVAL=${CAMERA_DISCOVER_INTERVAL:-60}
       # ONVIF配置（可选）
       - ONVIF_WSDL_DIR=${ONVIF_WSDL_DIR:-/etc/onvif/wsdl}
       # 时区配置
@@ -79,13 +113,16 @@ services:
       - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
       # GPU配置
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
+
+    # 资源限制（GPU 配置，由 install_linux.sh 在检测到 GPU 后自动启用）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [ gpu ]
+
     # 注意：使用host网络模式时，不需要配置extra_hosts
     # 容器直接使用宿主机网络栈，Kafka配置应使用宿主机IP或localhost，不能使用容器名
     # 如果Kafka运行在宿主机上，使用localhost:9092
@@ -97,6 +134,8 @@ services:
     restart: unless-stopped
 
     # 健康检查
+    # 注意：start_period设置为90秒，因为应用启动时会等待Nacos服务（最多30秒）
+    # 加上应用初始化时间，总共可能需要60-90秒
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6000/actuator/health"]
       interval: 30s
@@ -108,7 +147,7 @@ services:
     # 容器将直接使用宿主机的网络栈，可以：
     # 1. 访问宿主机局域网（用于ONVIF摄像头发现）
     # 2. 通过localhost访问映射到宿主机的中间件服务端口
-    # 3. 确保中间件服务（PostgresSQL 等）的端口已映射到宿主机
+    # 3. 确保中间件服务（Nacos、PostgresSQL等）的端口已映射到宿主机
 
     # 日志配置
     logging:

@@ -1,0 +1,2 @@
+# 抓拍算法计算节点离线运行时
+-r requirements-node-algorithm-realtime.txt

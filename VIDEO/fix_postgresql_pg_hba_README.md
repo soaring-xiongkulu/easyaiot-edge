@@ -6,7 +6,7 @@
 
 ```
 psycopg2.OperationalError: connection to server at "localhost" (127.0.0.1), port 5432 failed: 
-FATAL: no pg_hba.conf entry for host "172.18.0.1", user "postgres", database "iot-edge-video20", no encryption
+FATAL: no pg_hba.conf entry for host "172.18.0.1", user "postgres", database "iot-video20", no encryption
 ```
 
 这个错误通常发生在以下情况：
@@ -84,7 +84,7 @@ bash fix_postgresql_pg_hba.sh --check-only
 
 [INFO] PostgreSQL 容器: postgres-server
 [INFO] PostgreSQL 用户: postgres
-[INFO] PostgreSQL 数据库: iot-edge-video20
+[INFO] PostgreSQL 数据库: iot-video20
 
 [INFO] 检查 Docker 服务状态...
 [SUCCESS] Docker 服务正在运行
@@ -113,7 +113,7 @@ bash fix_postgresql_pg_hba.sh
 
 [INFO] PostgreSQL 容器: postgres-server
 [INFO] PostgreSQL 用户: postgres
-[INFO] PostgreSQL 数据库: iot-edge-video20
+[INFO] PostgreSQL 数据库: iot-video20
 
 [INFO] 检查 Docker 服务状态...
 [SUCCESS] Docker 服务正在运行
@@ -159,10 +159,10 @@ bash fix_postgresql_pg_hba.sh
 
 ```bash
 # Docker 环境（使用容器服务名称）
-DATABASE_URL=postgresql://postgres:iot45722414822@PostgresSQL:5432/iot-edge-video20
+DATABASE_URL=postgresql://postgres:iot45722414822@PostgresSQL:5432/iot-video20
 
 # 宿主机环境（使用 localhost）
-DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-edge-video20
+DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-video20
 ```
 
 ## 🔧 工作原理
@@ -282,7 +282,7 @@ docker ps | grep postgres
 # 应该看到: 0.0.0.0:5432->5432/tcp
 
 # 5. 测试连接
-PGPASSWORD=iot45722414822 psql -h localhost -U postgres -d iot-edge-video20 -c "SELECT 1;"
+PGPASSWORD=iot45722414822 psql -h localhost -U postgres -d iot-video20 -c "SELECT 1;"
 ```
 
 ### 问题 5：权限问题

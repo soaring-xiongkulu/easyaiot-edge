@@ -1,0 +1,37 @@
+# VIDEO 业务依赖（不含 PyTorch；由 requirements.txt 或 requirements-docker.txt 引用）
+setuptools<81
+Flask==2.3.2
+Flask-SQLAlchemy==3.0.5
+Flask-CORS>=3.0.0
+# YOLO26 需 ultralytics>=8.4.0；YOLO11/YOLOv8 仍兼容
+ultralytics>=8.4.0,<9.0.0
+onnxruntime-gpu==1.20.0
+openvino>=2024.0.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+python-dotenv==1.0.0
+PyYAML>=6.0.2
+requests>=2.31.0
+httpx[http2]>=0.27
+psycopg2-binary==2.9.9
+nacos-sdk-python==2.0.9
+minio==7.2.0
+python-magic==0.4.27
+numpy>=1.26.4,<3
+pytz>=2024.1
+py-healthcheck==1.10.0
+netifaces==0.11.0
+psutil>=7.1.0
+WSDiscovery==2.1.2
+onvif-zeep==0.2.12
+APScheduler>=3.10.4
+croniter>=1.4.1
+kafka-python>=2.0.2
+paho-mqtt>=1.6.1
+paddlepaddle==3.2.0
+paddleocr==3.2.0
+insightface
+pymilvus
+# pymilvus → environs 依赖 marshmallow.__version_info__，4.x 已移除该属性
+marshmallow>=3.13,<4
+pydub==0.25.1

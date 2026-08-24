@@ -18,7 +18,7 @@
     - 如果不提供 --confirm 参数，脚本会显示将要删除的表列表，并交互式询问确认
     - 提供 --confirm 参数会跳过交互式确认，直接执行删除和导入操作
     - 建议在非交互式环境中使用 --confirm 参数
-    - 脚本会先删除所有表，然后导入 .scripts/postgresql/iot-edge-video10.sql 文件到 iot-edge-video20 数据库
+    - 脚本会先删除所有表，然后导入 .scripts/postgresql/iot-video10.sql 文件到 iot-video20 数据库
 
 警告: 此操作会永久删除所有数据，请谨慎使用！
 """
@@ -152,7 +152,7 @@ def interactive_confirm(tables):
         print(f"   {i}. {table}")
     
     print("\n⚠️  此操作会永久删除所有数据，无法恢复！")
-    print("删除后将自动导入 .scripts/postgresql/iot-edge-video10.sql 文件到 iot-edge-video20 数据库")
+    print("删除后将自动导入 .scripts/postgresql/iot-video10.sql 文件到 iot-video20 数据库")
     print("\n请确认是否继续删除和导入操作？")
     
     while True:
@@ -248,7 +248,7 @@ def parse_database_url(database_url):
     }
 
 # 导入SQL文件
-def import_sql_file(db_info, sql_file_path, target_database='iot-edge-video20'):
+def import_sql_file(db_info, sql_file_path, target_database='iot-video20'):
     """使用psql命令导入SQL文件"""
     if not os.path.exists(sql_file_path):
         print(f"❌ SQL文件不存在: {sql_file_path}")
@@ -346,20 +346,20 @@ def main():
     
     # 解析数据库连接信息（用于psql命令）
     db_info = parse_database_url(database_url)
-    # 使用iot-edge-video20作为目标数据库
-    db_info['database'] = 'iot-edge-video20'
+    # 使用iot-video20作为目标数据库
+    db_info['database'] = 'iot-video20'
     
     print(f"\n📊 数据库连接信息:")
     # 隐藏密码显示
     safe_url = database_url_for_sqlalchemy.split('@')[1] if '@' in database_url_for_sqlalchemy else database_url_for_sqlalchemy
     print(f"   数据库: {safe_url}")
-    print(f"   目标数据库: iot-edge-video20")
+    print(f"   目标数据库: iot-video20")
     print()
     
     # 创建数据库引擎（用于删除表）
     try:
-        # 修改数据库URL以连接到iot-edge-video20数据库
-        db_url_for_drop = re.sub(r'/([^/]+)(\?|$)', f'/iot-edge-video20\\2', database_url_for_sqlalchemy)
+        # 修改数据库URL以连接到iot-video20数据库
+        db_url_for_drop = re.sub(r'/([^/]+)(\?|$)', f'/iot-video20\\2', database_url_for_sqlalchemy)
         engine = create_engine(db_url_for_drop, pool_pre_ping=True)
         
         # 测试连接
@@ -382,9 +382,9 @@ def main():
     # 获取项目根目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
-    sql_file_path = os.path.join(project_root, '.scripts', 'postgresql', 'iot-edge-video10.sql')
+    sql_file_path = os.path.join(project_root, '.scripts', 'postgresql', 'iot-video10.sql')
     
-    import_success = import_sql_file(db_info, sql_file_path, target_database='iot-edge-video20')
+    import_success = import_sql_file(db_info, sql_file_path, target_database='iot-video20')
     
     if success and import_success:
         print("\n✅ 操作完成：已删除所有表并成功导入新表结构")

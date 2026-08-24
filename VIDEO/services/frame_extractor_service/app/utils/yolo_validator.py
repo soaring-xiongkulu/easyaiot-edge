@@ -22,13 +22,13 @@ except ImportError:
 
 def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
     """
-    验证YOLO模型版本，只接受yolov8或yolov11
+    验证YOLO模型版本，接受 yolov8、yolov11 或 yolov26
     
     Args:
         model_path: 模型文件路径
         
     Returns:
-        (版本字符串, 检测方法) - 如果版本为yolov8或yolov11，返回版本字符串；否则返回None
+        (版本字符串, 检测方法) - 如果版本为 yolov8、yolov11 或 yolov26，返回版本字符串；否则返回 None
         
     Raises:
         FileNotFoundError: 模型文件不存在
@@ -48,7 +48,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
             if isinstance(checkpoint, dict):
                 # 检查模型元数据中的版本信息
                 metadata_str = str(checkpoint).lower()
-                if 'yolo11' in metadata_str or 'yolo 11' in metadata_str:
+                if 'yolo26' in metadata_str or 'yolo 26' in metadata_str:
+                    return 'yolov26', "torch模型元数据"
+                elif 'yolo11' in metadata_str or 'yolo 11' in metadata_str:
                     return 'yolov11', "torch模型元数据"
                 elif 'yolo8' in metadata_str or 'yolo 8' in metadata_str or 'yolov8' in metadata_str:
                     return 'yolov8', "torch模型元数据"
@@ -58,7 +60,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
                     model_data = checkpoint['model']
                     if isinstance(model_data, dict):
                         model_str = str(model_data).lower()
-                        if 'yolo11' in model_str:
+                        if 'yolo26' in model_str:
+                            return 'yolov26', "torch模型元数据"
+                        elif 'yolo11' in model_str:
                             return 'yolov11', "torch模型元数据"
                         elif 'yolo8' in model_str or 'yolov8' in model_str:
                             return 'yolov8', "torch模型元数据"
@@ -73,7 +77,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
         # 方法1: 检查模型信息字符串（注意：model.info()可能会打印信息但不返回包含版本号的字符串）
         try:
             model_info = str(model.info()).lower()
-            if 'yolo11' in model_info or 'yolo 11' in model_info:
+            if 'yolo26' in model_info or 'yolo 26' in model_info:
+                return 'yolov26', "ultralytics库"
+            elif 'yolo11' in model_info or 'yolo 11' in model_info:
                 return 'yolov11', "ultralytics库"
             elif 'yolo8' in model_info or 'yolo 8' in model_info or 'yolov8' in model_info:
                 return 'yolov8', "ultralytics库"
@@ -83,7 +89,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
         # 方法2: 检查模型类名
         try:
             model_type = str(type(model.model)).lower()
-            if 'yolo11' in model_type:
+            if 'yolo26' in model_type:
+                return 'yolov26', "ultralytics库（类名）"
+            elif 'yolo11' in model_type:
                 return 'yolov11', "ultralytics库（类名）"
             elif 'yolo8' in model_type or 'yolov8' in model_type:
                 return 'yolov8', "ultralytics库（类名）"
@@ -94,7 +102,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
         try:
             if hasattr(model.model, 'yaml') and model.model.yaml:
                 yaml_str = str(model.model.yaml).lower()
-                if 'yolo11' in yaml_str:
+                if 'yolo26' in yaml_str:
+                    return 'yolov26', "ultralytics库（yaml）"
+                elif 'yolo11' in yaml_str:
                     return 'yolov11', "ultralytics库（yaml）"
                 elif 'yolo8' in yaml_str or 'yolov8' in yaml_str:
                     return 'yolov8', "ultralytics库（yaml）"
@@ -105,7 +115,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
         try:
             if hasattr(model, 'overrides') and model.overrides:
                 overrides_str = str(model.overrides).lower()
-                if 'yolo11' in overrides_str:
+                if 'yolo26' in overrides_str:
+                    return 'yolov26', "ultralytics库（metadata）"
+                elif 'yolo11' in overrides_str:
                     return 'yolov11', "ultralytics库（metadata）"
                 elif 'yolo8' in overrides_str or 'yolov8' in overrides_str:
                     return 'yolov8', "ultralytics库（metadata）"
@@ -117,7 +129,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
             if hasattr(model.model, 'names'):
                 # 尝试通过模型结构判断
                 model_str = str(model.model).lower()
-                if 'yolo11' in model_str:
+                if 'yolo26' in model_str:
+                    return 'yolov26', "ultralytics库（架构）"
+                elif 'yolo11' in model_str:
                     return 'yolov11', "ultralytics库（架构）"
                 elif 'yolo8' in model_str or 'yolov8' in model_str:
                     return 'yolov8', "ultralytics库（架构）"
@@ -126,7 +140,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
         
         # 方法6: 检查模型文件路径（作为备用）
         model_path_lower = model_path.lower()
-        if 'yolo11' in model_path_lower:
+        if 'yolo26' in model_path_lower:
+            return 'yolov26', "ultralytics库（文件名）"
+        elif 'yolo11' in model_path_lower:
             return 'yolov11', "ultralytics库（文件名）"
         elif 'yolo8' in model_path_lower or 'yolov8' in model_path_lower:
             return 'yolov8', "ultralytics库（文件名）"
@@ -137,7 +153,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
             task = getattr(model, 'task', None)
             if task:
                 task_str = str(task).lower()
-                if 'yolo11' in task_str:
+                if 'yolo26' in task_str:
+                    return 'yolov26', "ultralytics库（任务类型）"
+                elif 'yolo11' in task_str:
                     return 'yolov11', "ultralytics库（任务类型）"
                 elif 'yolo8' in task_str or 'yolov8' in task_str:
                     return 'yolov8', "ultralytics库（任务类型）"
@@ -147,7 +165,9 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
                 inner_model = model.model.model
                 if hasattr(inner_model, '__class__'):
                     class_name = str(inner_model.__class__).lower()
-                    if 'yolo11' in class_name or 'yolo 11' in class_name:
+                    if 'yolo26' in class_name or 'yolo 26' in class_name:
+                        return 'yolov26', "ultralytics库（内部模型类）"
+                    elif 'yolo11' in class_name or 'yolo 11' in class_name:
                         return 'yolov11', "ultralytics库（内部模型类）"
                     elif 'yolo8' in class_name or 'yolov8' in class_name or 'yolo 8' in class_name:
                         return 'yolov8', "ultralytics库（内部模型类）"
@@ -168,8 +188,8 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
         # 检查是否是YOLOv5模型
         if 'yolov5' in error_str or 'yolo v5' in error_str or 'yolo5' in error_str:
             raise Exception(
-                "检测到YOLOv5模型。该模型与YOLOv8/YOLOv11不兼容。\n"
-                "请使用YOLOv8或YOLOv11模型，或使用最新版本的ultralytics包重新训练模型。"
+                "检测到YOLOv5模型。该模型与 YOLOv8/YOLOv11/YOLOv26 不兼容。\n"
+                "请使用 YOLOv8、YOLOv11 或 YOLOv26 模型，或使用最新版本的 ultralytics 包重新训练模型。"
             )
         
         # 检查是否是其他不支持的模型版本
@@ -187,8 +207,8 @@ def validate_yolo_model(model_path: str) -> Tuple[Optional[str], str]:
             
             if detected_version:
                 raise Exception(
-                    f"检测到{detected_version}模型。该模型与YOLOv8/YOLOv11不兼容。\n"
-                    "请使用YOLOv8或YOLOv11模型，或使用最新版本的ultralytics包重新训练模型。"
+                    f"检测到{detected_version}模型。该模型与 YOLOv8/YOLOv11/YOLOv26 不兼容。\n"
+                    "请使用 YOLOv8、YOLOv11 或 YOLOv26 模型，或使用最新版本的 ultralytics 包重新训练模型。"
                 )
         
         # 其他错误，抛出原始异常信息

@@ -1,0 +1,7 @@
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# Docker 构建专用（基础镜像 pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel 已含 torch/torchvision）
+# 仅安装业务依赖，避免与镜像内已有包反复卸载重装。
+#
+# 本地直装请使用 requirements.txt
+
+-r requirements-base.txt

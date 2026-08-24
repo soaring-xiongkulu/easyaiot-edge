@@ -20,11 +20,20 @@ if _original_cuda_visible_devices is None:
     # 如果未设置，临时设置为空，避免CUDA库加载错误
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
+import ast
+import json
 import cv2
 import numpy as np
 import logging
 from typing import Tuple, List, Dict, Any, Optional
 from PIL import Image
+try:
+    from app.utils.utf8_detection_label import draw_detection_label
+except ModuleNotFoundError as exc:
+    if exc.name != "app.utils.utf8_detection_label":
+        raise
+    # 兼容以 frame_extractor_service 为工作目录的独立启动方式。
+    from .utf8_detection_label import draw_detection_label
 
 try:
     import onnxruntime as ort
@@ -146,15 +155,18 @@ def draw_detections(img, box, score, class_id, classes_dict: Dict[int, str], col
     # 创建标签文本，包括类名和得分
     class_name = classes_dict.get(class_id, f'class_{class_id}')
     label = f'{class_name}: {score:.2f}'
-    # 计算标签文本的尺寸
-    (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-    # 计算标签文本的位置
-    label_x = x1
-    label_y = y1 - 10 if y1 - 10 > label_height else y1 + 10
-    # 绘制填充的矩形作为标签文本的背景
-    cv2.rectangle(img, (label_x, label_y - label_height), (label_x + label_width, label_y + label_height), color, cv2.FILLED)
-    # 在图像上绘制标签文本
-    cv2.putText(img, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+    # 绘制标签及背景；中文类别使用 Pillow + CJK 字体绘制
+    draw_detection_label(
+        img,
+        label,
+        int(x1),
+        int(y1),
+        (0, 0, 0),
+        font_scale=0.5,
+        font_thickness=1,
+        cjk_font_size=18,
+        background_bgr=tuple(int(channel) for channel in color),
+    )
 
 
 def preprocess(img, input_width, input_height):
@@ -180,6 +192,53 @@ def preprocess(img, input_width, input_height):
     image_data = np.expand_dims(image_data, axis=0).astype(np.float32)
     # 返回预处理后的图像数据
     return image_data, img_height, img_width
+
+
+def _is_end2end_yolo_output(output) -> bool:
+    arr = np.squeeze(output[0])
+    return arr.ndim >= 2 and int(arr.shape[-1]) == 6
+
+
+def postprocess_end2end(
+    input_image,
+    output,
+    input_width,
+    input_height,
+    img_width,
+    img_height,
+    conf_threshold: float = None,
+    classes_dict: Dict[int, str] = None,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+    conf_thresh = conf_threshold if conf_threshold is not None else confidence_thres
+    if classes_dict is None:
+        classes_dict = classes
+
+    arr = np.squeeze(output[0])
+    if arr.ndim == 3:
+        arr = arr[0]
+
+    x_factor = img_width / input_width
+    y_factor = img_height / input_height
+    detections = []
+    for row in arr:
+        x1, y1, x2, y2, score, cls_id = row[:6]
+        score = float(score)
+        if score < conf_thresh:
+            continue
+        class_id = int(cls_id)
+        class_name = classes_dict.get(class_id, f'class_{class_id}')
+        detections.append({
+            'class': class_id,
+            'class_name': class_name,
+            'confidence': score,
+            'bbox': [
+                int(float(x1) * x_factor),
+                int(float(y1) * y_factor),
+                int(float(x2) * x_factor),
+                int(float(y2) * y_factor),
+            ],
+        })
+    return input_image, detections
 
 
 def postprocess(input_image, output, input_width, input_height, img_width, img_height, 
@@ -215,6 +274,18 @@ def postprocess(input_image, output, input_width, input_height, img_width, img_h
         classes_dict = classes
     if color_palette_array is None:
         color_palette_array = color_palette
+
+    if _is_end2end_yolo_output(output):
+        return postprocess_end2end(
+            input_image,
+            output,
+            input_width,
+            input_height,
+            img_width,
+            img_height,
+            conf_threshold=conf_thresh,
+            classes_dict=classes_dict,
+        )
 
     # 转置和压缩输出以匹配预期的形状
     outputs = np.transpose(np.squeeze(output[0]))
@@ -280,72 +351,70 @@ def postprocess(input_image, output, input_width, input_height, img_width, img_h
     return input_image, detections
 
 
+def _parse_names_metadata(raw: str) -> Optional[Dict[int, str]]:
+    if not raw or not str(raw).strip():
+        return None
+    text = str(raw).strip()
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            obj = parser(text)
+            if isinstance(obj, dict) and obj:
+                return {int(k): str(v) for k, v in obj.items()}
+            if isinstance(obj, list) and obj:
+                return {i: str(v) for i, v in enumerate(obj)}
+        except Exception:
+            continue
+    return None
+
+
 def get_classes_from_onnx_model(onnx_model_path: str) -> Optional[Dict[int, str]]:
     """
     尝试从ONNX模型或对应的YOLO模型中获取类别信息
-    
-    Args:
-        onnx_model_path: ONNX模型文件路径
-        
-    Returns:
-        类别字典，如果无法获取则返回None
     """
-    # 方法1: 尝试从ONNX模型的元数据中获取类别信息
     try:
         if ort is not None:
             session = ort.InferenceSession(onnx_model_path, providers=['CPUExecutionProvider'])
             metadata = session.get_modelmeta()
-            # 检查元数据中是否有类别信息
             if hasattr(metadata, 'custom_metadata_map') and metadata.custom_metadata_map:
-                # 尝试从元数据中获取类别
                 if 'names' in metadata.custom_metadata_map:
-                    import json
-                    names_json = metadata.custom_metadata_map['names']
-                    names_dict = json.loads(names_json)
-                    # 将字符串键转换为整数键
-                    classes_dict = {int(k): v for k, v in names_dict.items()}
-                    logging.info(f"从ONNX模型元数据中获取到 {len(classes_dict)} 个类别")
-                    return classes_dict
+                    parsed = _parse_names_metadata(metadata.custom_metadata_map['names'])
+                    if parsed:
+                        logging.info(f"从ONNX模型元数据中获取到 {len(parsed)} 个类别")
+                        return parsed
     except Exception as e:
         logging.debug(f"无法从ONNX模型元数据获取类别信息: {str(e)}")
-    
-    # 方法2: 尝试从对应的YOLO模型文件中获取类别信息
+
     try:
-        # 查找同目录下的.pt文件（可能是对应的PyTorch模型）
-        import os
         model_dir = os.path.dirname(onnx_model_path)
         model_basename = os.path.splitext(os.path.basename(onnx_model_path))[0]
-        
-        # 尝试查找同名的.pt文件
         pt_file = os.path.join(model_dir, f"{model_basename}.pt")
         if os.path.exists(pt_file):
             try:
                 from ultralytics import YOLO
                 yolo_model = YOLO(pt_file)
                 if hasattr(yolo_model, 'names') and yolo_model.names:
-                    # 将YOLO的names字典转换为我们的格式
                     classes_dict = {int(k): str(v) for k, v in yolo_model.names.items()}
                     logging.info(f"从对应的YOLO模型文件中获取到 {len(classes_dict)} 个类别")
                     return classes_dict
             except Exception as e:
                 logging.debug(f"无法从YOLO模型文件获取类别信息: {str(e)}")
-        
-        # 尝试查找同目录下的其他.pt文件
-        for file in os.listdir(model_dir):
-            if file.endswith('.pt'):
-                try:
-                    from ultralytics import YOLO
-                    pt_path = os.path.join(model_dir, file)
-                    yolo_model = YOLO(pt_path)
-                    if hasattr(yolo_model, 'names') and yolo_model.names:
-                        classes_dict = {int(k): str(v) for k, v in yolo_model.names.items()}
-                        logging.info(f"从同目录下的YOLO模型文件 {file} 中获取到 {len(classes_dict)} 个类别")
-                        return classes_dict
-                except Exception:
-                    continue
+
+        if os.path.isdir(model_dir):
+            for file in os.listdir(model_dir):
+                if file.endswith('.pt'):
+                    try:
+                        from ultralytics import YOLO
+                        pt_path = os.path.join(model_dir, file)
+                        yolo_model = YOLO(pt_path)
+                        if hasattr(yolo_model, 'names') and yolo_model.names:
+                            classes_dict = {int(k): str(v) for k, v in yolo_model.names.items()}
+                            logging.info(f"从同目录下的YOLO模型文件 {file} 中获取到 {len(classes_dict)} 个类别")
+                            return classes_dict
+                    except Exception:
+                        continue
     except Exception as e:
         logging.debug(f"无法从YOLO模型文件获取类别信息: {str(e)}")
-    
+
     return None
 
 
@@ -508,4 +577,3 @@ class ONNXInference:
         )
         # 返回处理后的图像和检测结果
         return output_image, detections
-

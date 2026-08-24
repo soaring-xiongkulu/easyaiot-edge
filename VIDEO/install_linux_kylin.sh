@@ -33,6 +33,11 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/init-build-cache-dirs.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/init-build-cache-dirs.sh"
+# shellcheck source=../.scripts/docker/module_update_helpers.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/module_update_helpers.sh"
 
 # ARM架构基础镜像（针对麒麟系统）
 # 使用 ARM 版本的 PyTorch 镜像
@@ -54,6 +59,92 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+ensure_cpp_runtime() {
+    bash "${EASYAIOT_ROOT}/VIDEO/scripts/ensure_runtime_cpp.sh" install
+}
+
+wire_cpp_runtime_override() {
+    bash "${EASYAIOT_ROOT}/VIDEO/scripts/ensure_runtime_cpp.sh" wire || true
+}
+
+video_compose() {
+    local -a files=(-f docker-compose.yaml)
+    if [ -f .docker-compose.runtime.override.yaml ]; then
+        files+=(-f .docker-compose.runtime.override.yaml)
+    fi
+    if [ -f .docker-compose.gpu.override.yaml ]; then
+        files+=(-f .docker-compose.gpu.override.yaml)
+    fi
+    $COMPOSE_CMD "${files[@]}" "$@"
+}
+
+prepare_cached_resources() {
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
+    local wheels
+    wheels="$(arm_pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" video)"
+    local cache_script="${SCRIPT_DIR}/cache_resources_arm.sh"
+
+    if arm_pip_wheels_ready_for "$EASYAIOT_ROOT" video; then
+        print_success "检测到完整 pip-wheels: $wheels"
+        if stage_arm_ffmpeg_into_build_context "$EASYAIOT_ROOT" "$SCRIPT_DIR"; then
+            print_success "ARM ffmpeg 离线包已就绪（.build-cache/arm/video/ffmpeg）"
+        fi
+        return 0
+    fi
+    if [ "${AUTO_CACHE_PIP:-1}" != "1" ] || [ ! -f "$cache_script" ]; then
+        print_info "ARM pip-wheels 缺失或不完整，构建时将使用 pip-cache 在线安装（清华源）"
+        return 0
+    fi
+    print_warning "ARM pip-wheels 缺失或不完整，首次需预下载 pip 离线包，可能需要 10–30 分钟，进度如下..."
+    if [ -x "$cache_script" ]; then
+        ARM_BASE_IMAGE="${ARM_BASE_IMAGE:-pytorch/manylinuxaarch64-builder:cuda12.9}" "$cache_script" || true
+    else
+        /bin/bash "$cache_script" || true
+    fi
+
+    if stage_arm_ffmpeg_into_build_context "$EASYAIOT_ROOT" "$SCRIPT_DIR"; then
+        print_success "ARM ffmpeg 离线包已就绪（.build-cache/arm/video/ffmpeg）"
+    else
+        print_info "ARM ffmpeg 未缓存，构建时 Dockerfile 将尝试在线下载"
+    fi
+}
+
+build_with_cache() {
+    local no_cache_flag="$1"
+    local build_log="/tmp/docker_build_kylin_$$.log"
+    local build_status=0
+
+    init_easyaiot_build_cache_dirs "$EASYAIOT_ROOT"
+    enable_docker_buildkit
+    prepare_cached_resources
+
+    print_info "docker build（麒麟 ARM，Dockerfile.arm，项目根 .build-cache bind mount）..."
+    set +e
+    docker build \
+        -f Dockerfile.arm \
+        --build-context "pip-cache=$(pip_cache_build_context_dir_for "$EASYAIOT_ROOT" video)" \
+        --build-context "pip-wheels=$(arm_pip_wheels_build_context_dir_for "$EASYAIOT_ROOT" video)" \
+        --target runtime \
+        --platform "$DOCKER_PLATFORM" \
+        -t video-service:latest \
+        --pull=false \
+        --build-arg OFFLINE_MODE=${OFFLINE_MODE:-0} \
+        $no_cache_flag \
+        . 2>&1 | tee "$build_log"
+    build_status=${PIPESTATUS[0]}
+    set -e
+
+    if [ $build_status -ne 0 ]; then
+        print_error "镜像构建失败"
+        grep -iE "(error|warning|failed|失败|警告|exec format)" "$build_log" | tail -30 || true
+        rm -f "$build_log"
+        return 1
+    fi
+
+    rm -f "$build_log"
+    return 0
 }
 
 # 检查命令是否存在
@@ -142,45 +233,29 @@ detect_architecture() {
     export ARM_BASE_IMAGE
 }
 
-# 配置ARM架构的Dockerfile（针对麒麟系统）
+# 确保 ARM 架构 Dockerfile（Dockerfile.arm）存在，不覆写 x86 Dockerfile
 configure_kylin_dockerfile() {
-    print_info "配置麒麟系统 ARM 架构 Dockerfile..."
+    print_info "配置麒麟系统 ARM 架构 Dockerfile（Dockerfile.arm）..."
     
-    # 备份原始 Dockerfile
-    if [ ! -f Dockerfile.orig ]; then
-        cp Dockerfile Dockerfile.orig
-        print_info "已备份原始 Dockerfile 为 Dockerfile.orig"
-    fi
-    
-    # 优先使用 Dockerfile.arm（如果存在）
     if [ -f Dockerfile.arm ]; then
         print_info "使用现有的 Dockerfile.arm（ARM架构专用）"
-        cp Dockerfile.arm Dockerfile
-        print_success "已切换到 Dockerfile.arm"
     else
-        print_warning "Dockerfile.arm 不存在，将修改 Dockerfile 以支持 ARM 架构"
-        print_info "创建 ARM 版本的 Dockerfile..."
+        print_warning "Dockerfile.arm 不存在，将创建以支持 ARM 架构"
+        print_info "创建 ARM 版本的 Dockerfile.arm..."
         
         # 创建临时 Dockerfile，替换基础镜像
-        sed "1s|^FROM.*|FROM ${ARM_BASE_IMAGE} AS base|" Dockerfile.orig > Dockerfile.kylin.tmp
+        sed "1s|^FROM.*|FROM ${ARM_BASE_IMAGE} AS base|" Dockerfile > Dockerfile.kylin.tmp
         
-        # 检查是否需要修改 apt 源（麒麟系统可能需要特殊配置）
-        # 如果基础镜像是基于 Ubuntu/Debian，保持原有配置
-        # 如果基础镜像是基于 CentOS/RHEL，需要修改为 yum
-        
-        mv Dockerfile.kylin.tmp Dockerfile.kylin
-        cp Dockerfile.kylin Dockerfile
-        print_success "已创建麒麟系统 ARM 版本的 Dockerfile"
+        mv Dockerfile.kylin.tmp Dockerfile.arm
+        print_success "已创建 ARM 版本的 Dockerfile.arm"
     fi
+
+    stage_arm_ffmpeg_into_build_context "$EASYAIOT_ROOT" "$SCRIPT_DIR" || true
 }
 
 # 恢复原始 Dockerfile（可选）
 restore_dockerfile() {
-    if [ -f Dockerfile.orig ]; then
-        print_info "恢复原始 Dockerfile..."
-        cp Dockerfile.orig Dockerfile
-        print_success "已恢复原始 Dockerfile"
-    fi
+    print_info "无需恢复，Dockerfile 不再被覆写"
 }
 
 # 检查并创建 Docker 网络
@@ -247,6 +322,21 @@ create_directories() {
     print_success "目录创建完成"
 }
 
+# 检查人脸特征提取模型（face_rec.onnx，约 167MB；安装时不自动下载，请登录 WEB 人脸库页下载）
+download_face_rec_model() {
+    local target="${SCRIPT_DIR}/face_rec.onnx"
+    if [ -d "$target" ]; then
+        print_warning "face_rec.onnx 误为目录（Docker 文件卷导致），正在清理..."
+        rm -rf "$target"
+    fi
+    if [ -f "$target" ] && [ "$(stat -c%s "$target" 2>/dev/null || stat -f%z "$target" 2>/dev/null || echo 0)" -ge 10485760 ]; then
+        print_success "人脸特征模型 face_rec.onnx 已存在"
+        return 0
+    fi
+    print_warning "人脸特征模型 face_rec.onnx 未安装（约 167MB），安装过程不自动下载"
+    print_info "请登录系统后进入「摄像头 → 人脸库」，按页面提示下载并安装模型"
+}
+
 # 清理 VIDEO 服务的 compose 容器网络缓存
 clean_compose_cache() {
     print_info "清理 VIDEO 服务的 compose 容器网络缓存..."
@@ -280,7 +370,7 @@ clean_compose_cache() {
     # 1. 停止并清理容器和网络连接
     print_info "执行 docker-compose down 清理容器和网络连接..."
     # 使用 eval 来正确处理包含空格的 COMPOSE_CMD
-    if eval "$COMPOSE_CMD down" 2>/dev/null; then
+    if eval "video_compose down" 2>/dev/null; then
         print_success "容器和网络连接已清理"
     else
         print_info "docker-compose down 执行完成（可能没有运行的容器）"
@@ -316,7 +406,10 @@ clean_compose_cache() {
     
     # 4. 清理 docker-compose 的临时文件（如果存在）
     print_info "清理 docker-compose 临时文件..."
-    find . -maxdepth 1 -name ".docker-compose.*" -type f -delete 2>/dev/null || true
+    find . -maxdepth 1 -name ".docker-compose.*" -type f \
+        ! -name ".docker-compose.gpu.override.yaml" \
+        ! -name ".docker-compose.runtime.override.yaml" \
+        -delete 2>/dev/null || true
     find . -maxdepth 1 -name "docker-compose.override.yml" -type f -delete 2>/dev/null || true
     find . -maxdepth 1 -name "docker-compose.override.yaml" -type f -delete 2>/dev/null || true
     
@@ -335,7 +428,10 @@ create_env_file() {
             print_info "自动配置中间件连接信息（使用host网络模式，通过localhost访问中间件）..."
             
             # 更新数据库连接（使用localhost，因为使用host网络模式）
-            sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-edge-video20|' .env.docker
+            sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-video20|' .env.docker
+            
+            # 更新Nacos配置（使用localhost，因为使用host网络模式）
+            sed -i 's|^NACOS_SERVER=.*|NACOS_SERVER=localhost:8848|' .env.docker
             
             # 更新MinIO配置（使用localhost，因为使用host网络模式）
             sed -i 's|^MINIO_ENDPOINT=.*|MINIO_ENDPOINT=localhost:9000|' .env.docker
@@ -350,6 +446,8 @@ create_env_file() {
             # 更新TDengine配置（使用localhost，因为使用host网络模式）
             sed -i 's|^TDENGINE_HOST=.*|TDENGINE_HOST=localhost|' .env.docker
             
+            # 更新Nacos密码
+            sed -i 's|^NACOS_PASSWORD=.*|NACOS_PASSWORD=basiclab@iot78475418754|' .env.docker
             
             print_success "中间件连接信息已自动配置（使用host网络模式）"
             print_info "注意：使用host网络模式后，容器可以直接访问宿主机局域网，支持ONVIF摄像头发现"
@@ -364,8 +462,14 @@ create_env_file() {
         
         # 检查并更新数据库连接（如果还是旧的服务名，改为localhost）
         if grep -q "DATABASE_URL=.*PostgresSQL" .env.docker || grep -q "DATABASE_URL=.*postgres-server" .env.docker; then
-            sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-edge-video20|' .env.docker
+            sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:iot45722414822@localhost:5432/iot-video20|' .env.docker
             print_info "已更新数据库连接为 localhost:5432（host网络模式）"
+        fi
+        
+        # 检查并更新Nacos配置（如果还是IP地址或旧的服务名，改为localhost）
+        if grep -q "NACOS_SERVER=.*14\.18\.122\.2" .env.docker || grep -q "NACOS_SERVER=.*Nacos" .env.docker || grep -q "NACOS_SERVER=.*nacos-server" .env.docker; then
+            sed -i 's|^NACOS_SERVER=.*|NACOS_SERVER=localhost:8848|' .env.docker
+            print_info "已更新Nacos连接为 localhost:8848（host网络模式）"
         fi
         
         # 检查并更新MinIO配置（如果还是旧的服务名，改为localhost）
@@ -405,48 +509,31 @@ install_service() {
     clean_compose_cache
     check_network
     create_directories
+    download_face_rec_model
     create_env_file
+    ensure_cpp_runtime || true
+    prepare_cached_resources
     
-    print_info "构建 Docker 镜像（麒麟系统 ARM架构，根据代码重新构建）..."
-    print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
-    print_warning "首次构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在下载基础镜像和安装依赖..."
-    print_info "构建进度将实时显示，请勿中断..."
-    print_info "注意：使用 --platform 参数确保使用正确的架构..."
-    echo ""
-    
-    # 使用 docker build 命令构建镜像，明确指定平台为 linux/arm64
-    # 这是解决 "exec format error" 的关键
-    BUILD_LOG="/tmp/docker_build_kylin_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build \
-        --target runtime \
-        --platform "$DOCKER_PLATFORM" \
-        -t video-service:latest \
-        . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告|exec format)" "$BUILD_LOG" | tail -30 || true
-        print_info ""
-        print_info "常见问题排查："
-        print_info "  1. 确保 Docker 支持多架构构建（Docker 19.03+）"
-        print_info "  2. 检查基础镜像是否存在 ARM 版本"
-        print_info "  3. 如果基础镜像不支持 ARM，请使用 Dockerfile.arm"
-        print_info "  4. 查看完整构建日志: cat $BUILD_LOG"
-        rm -f "$BUILD_LOG"
-        exit 1
+    if [ "${EASYAIOT_SKIP_BUILD:-0}" = "1" ] && docker image inspect video-service:latest >/dev/null 2>&1; then
+        print_success "镜像已从远程拉取 (video-service:latest)，跳过构建"
+    else
+        print_info "构建 Docker 镜像（麒麟 ARM，优先复用离线 pip 缓存）..."
+        print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
+        print_warning "首次构建可能需要较长时间（20-40分钟），请耐心等待..."
+        print_info "正在下载基础镜像和安装依赖..."
+        print_info "构建进度将实时显示，请勿中断..."
+        echo ""
+        
+        if ! build_with_cache ""; then
+            exit 1
+        fi
+        echo ""
+        print_success "镜像构建完成！"
     fi
     
-    rm -f "$BUILD_LOG"
-    echo ""
-    print_success "镜像构建完成！"
-    
     print_info "启动服务..."
-    $COMPOSE_CMD up -d
+    wire_cpp_runtime_override
+    video_compose up -d
     
     print_success "服务安装完成！"
     print_info "等待服务启动..."
@@ -475,7 +562,8 @@ start_service() {
         create_env_file
     fi
     
-    $COMPOSE_CMD up -d
+    wire_cpp_runtime_override
+    video_compose up -d
     print_success "服务已启动"
     check_status
 }
@@ -486,7 +574,7 @@ stop_service() {
     check_docker
     check_docker_compose
     
-    $COMPOSE_CMD down
+    video_compose down
     print_success "服务已停止"
 }
 
@@ -499,7 +587,7 @@ restart_service() {
     configure_kylin_dockerfile
     clean_compose_cache
     
-    $COMPOSE_CMD restart
+    video_compose restart
     print_success "服务已重启"
     check_status
 }
@@ -510,7 +598,7 @@ check_status() {
     check_docker
     check_docker_compose
     
-    $COMPOSE_CMD ps
+    video_compose ps
     
     echo ""
     print_info "容器健康状态:"
@@ -534,10 +622,10 @@ view_logs() {
     
     if [ "$1" == "-f" ] || [ "$1" == "--follow" ]; then
         print_info "实时查看日志（按 Ctrl+C 退出）..."
-        $COMPOSE_CMD logs -f --tail=50
+        video_compose logs -f --tail=50
     else
         print_info "查看最近日志（最近50行）..."
-        $COMPOSE_CMD logs --tail=50
+        video_compose logs --tail=50
     fi
 }
 
@@ -548,41 +636,22 @@ build_image() {
     check_docker_compose
     detect_architecture
     configure_kylin_dockerfile
+
+    if [ "${FORCE_REBUILD:-0}" != "1" ] && docker image inspect video-service:latest >/dev/null 2>&1; then
+        print_success "video-service:latest 已存在，跳过 Docker 构建（强制重建请设置 FORCE_REBUILD=1）"
+        return 0
+    fi
     
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "重新构建可能需要较长时间（20-40分钟），请耐心等待..."
-    print_info "正在重新下载基础镜像和安装依赖..."
     print_info "构建进度将实时显示，请勿中断..."
-    print_info "注意：使用 --platform 参数确保使用正确的架构..."
     echo ""
-    
-    # 使用 docker build 命令构建镜像，明确指定平台为 linux/arm64
-    BUILD_LOG="/tmp/docker_build_kylin_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build \
-        --target runtime \
-        --platform "$DOCKER_PLATFORM" \
-        -t video-service:latest \
-        --no-cache \
-        . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告|exec format)" "$BUILD_LOG" | tail -30 || true
-        print_info ""
-        print_info "常见问题排查："
-        print_info "  1. 确保 Docker 支持多架构构建（Docker 19.03+）"
-        print_info "  2. 检查基础镜像是否存在 ARM 版本"
-        print_info "  3. 如果基础镜像不支持 ARM，请使用 Dockerfile.arm"
-        print_info "  4. 查看完整构建日志: cat $BUILD_LOG"
-        rm -f "$BUILD_LOG"
+
+    local cache_flag=""
+    [ "${FORCE_REBUILD:-0}" = "1" ] && cache_flag="--no-cache"
+    if ! build_with_cache "$cache_flag"; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成"
 }
@@ -596,7 +665,7 @@ clean_service() {
         check_docker
         check_docker_compose
         print_info "停止并删除容器..."
-        $COMPOSE_CMD down -v
+        video_compose down -v
         
         print_info "删除镜像..."
         docker rmi video-service:latest 2>/dev/null || true
@@ -613,55 +682,42 @@ clean_service() {
 # 更新服务
 update_service() {
     print_info "更新服务..."
+    ensure_cpp_runtime || true
     check_docker
     check_docker_compose
     detect_architecture
     configure_kylin_dockerfile
     clean_compose_cache
     check_network
-    
+
+    if easyaiot_update_should_recreate_only video-service:latest; then
+        wire_cpp_runtime_override
+        video_compose up -d --force-recreate --remove-orphans
+        print_success "服务更新完成"
+        return 0
+    fi
+
+    prepare_cached_resources
+
     print_info "拉取最新代码..."
-    git pull || print_warning "Git pull 失败，继续使用当前代码"
-    
+    easyaiot_git_pull_ff_only
+
     print_info "重新构建镜像..."
     print_info "架构: $ARCH, 平台: $DOCKER_PLATFORM, 基础镜像: $ARM_BASE_IMAGE"
     print_warning "构建可能需要较长时间（20-40分钟），请耐心等待..."
     print_info "正在构建镜像..."
     print_info "构建进度将实时显示，请勿中断..."
-    print_info "注意：使用 --platform 参数确保使用正确的架构..."
     echo ""
     
-    # 使用 docker build 命令构建镜像，明确指定平台为 linux/arm64
-    BUILD_LOG="/tmp/docker_build_kylin_$$.log"
-    set +e  # 暂时关闭错误退出，以便捕获构建状态
-    DOCKER_BUILDKIT=1 docker build \
-        --target runtime \
-        --platform "$DOCKER_PLATFORM" \
-        -t video-service:latest \
-        . 2>&1 | tee "$BUILD_LOG"
-    BUILD_STATUS=${PIPESTATUS[0]}
-    set -e  # 重新开启错误退出
-    
-    if [ $BUILD_STATUS -ne 0 ]; then
-        print_error "镜像构建失败"
-        print_info "查看详细错误信息:"
-        grep -iE "(error|warning|failed|失败|警告|exec format)" "$BUILD_LOG" | tail -30 || true
-        print_info ""
-        print_info "常见问题排查："
-        print_info "  1. 确保 Docker 支持多架构构建（Docker 19.03+）"
-        print_info "  2. 检查基础镜像是否存在 ARM 版本"
-        print_info "  3. 如果基础镜像不支持 ARM，请使用 Dockerfile.arm"
-        print_info "  4. 查看完整构建日志: cat $BUILD_LOG"
-        rm -f "$BUILD_LOG"
+    if ! build_with_cache ""; then
         exit 1
     fi
-    
-    rm -f "$BUILD_LOG"
     echo ""
     print_success "镜像构建完成！"
     
     print_info "重启服务..."
-    $COMPOSE_CMD up -d
+    wire_cpp_runtime_override
+    video_compose up -d
     
     print_success "服务更新完成"
     check_status

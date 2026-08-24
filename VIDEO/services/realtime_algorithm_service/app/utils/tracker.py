@@ -304,7 +304,7 @@ class SimpleTracker:
                     })
             
             return tracked_detections
-    
+
     def get_all_tracks(self, current_time: Optional[float] = None, frame_number: Optional[int] = None) -> List[Dict]:
         """获取所有当前追踪目标的缓存框信息"""
         if current_time is None:

@@ -1,0 +1,8 @@
+# AI 后处理集群计算节点离线运行时（无外网，由 export_node_pip_wheels.sh 打包）
+Flask==2.3.2
+Flask-SQLAlchemy==3.0.5
+python-dotenv==1.0.0
+requests>=2.31.0
+psycopg2-binary==2.9.9
+kafka-python>=2.0.2
+psutil>=7.1.0

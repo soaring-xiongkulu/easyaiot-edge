@@ -1,0 +1,81 @@
+# Git / IDE
+.git
+.gitignore
+.idea
+.vscode
+*.iml
+*.ipr
+*.iws
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# 日志与临时文件
+*.log
+logs/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 运行时数据（compose 卷挂载，勿打入镜像）
+data/
+static/
+temp_uploads/
+model/
+alert_images/
+
+# 仅排除 167MB 的 face_rec.onnx（非 git 跟踪、单独卷挂载 ./face_rec.onnx:/app/face_rec.onnx）：
+# 它若进构建上下文会每次拖慢 build。
+# 切勿用 *.onnx —— face_det.onnx / plate_detect.onnx / plate_rec.onnx 是 git 跟踪且被
+# 人脸/车牌识别代码依赖（app/utils/face_model_paths.py 等），需保留在镜像内以保证镜像自包含。
+face_rec.onnx
+
+# 测试媒体文件
+video/
+
+# 环境变量（运行时通过卷挂载 .env.docker）
+.env
+.env.*
+!.env.example
+.env.prod
+
+# 安装 / 缓存脚本
+*.sh
+cache_resources*.sh
+install_linux*.sh
+!docker-entrypoint.sh
+
+# Docker 构建文件
+docker-compose.yaml
+docker-compose*.yaml
+Dockerfile*
+.dockerignore
+
+# 项目根构建缓存（经 --build-context 挂载）
+.build-cache
+
+# 测试与开发工具
+test_*.py
+test_*/
+
+# 文档
+*.md
+README*
+LICENSE
+docs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
