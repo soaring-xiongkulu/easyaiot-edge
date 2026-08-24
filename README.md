@@ -67,9 +67,8 @@ The platform continues the cloud-edge-device integration concept of the main pro
 
 ## 💡 Technical Philosophy
 
-We adhere to a **Java + Python + C++** multi-language hybrid architecture, leveraging the strengths of each:
+We adhere to a **Python + C++** multi-language hybrid architecture, leveraging the strengths of each:
 
-- **Java**: Builds a stable and reliable platform with enterprise-level capabilities
 - **Python**: Streaming media processing, AI algorithm orchestration, model services
 - **C++**: High-performance inference hot path (TASK), low latency, low memory footprint; under the same scheduling logic, inference acceleration can be tailored for different chips
 
@@ -80,7 +79,7 @@ In edge scenarios, modules connect directly through **environment variables + fi
 | Dimension | Edge Sub-Project Focus |
 |-----------|------------------------|
 | **Product form** | Edge device first, image and service composition orchestrated for all-in-one machine/box scenarios |
-| **Memory and resources** | **4GB-level target** (streamlined service set + adjustable JVM/Worker/inference parameters) |
+| **Memory and resources** | **4GB-level target** (streamlined service set + adjustable Worker/inference parameters) |
 | **Deployment topology** | Single machine or a few nodes, middleware and business directly connected, no multi-tenancy |
 | **Service discovery** | Fixed ports + environment variables, **does not rely on** centralized registry |
 | **Network** | Video service defaults to `network_mode: host`, convenient for communication with cameras/LAN |
