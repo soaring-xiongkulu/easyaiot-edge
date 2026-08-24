@@ -185,11 +185,11 @@ EasyAIoT Edge supports deployment on three major platforms: Linux / Mac / Window
   <img src=".image/banner/banner1003.png" width="49%">
 </div>
 
-## 📞 Contact (After adding WeChat, follow the official account to be invited to the technical exchange group)
+## 📞 Contact Information
 
-<div>
-  <img src=".image/联系方式.jpg" alt="Contact" width="30%" style="margin-right: 50px;">
-</div>
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+Please follow our official account below first, then reach us via the technical exchange group or WeChat.
+</p>
 
 ## 👥 Official Account
 
@@ -197,7 +197,27 @@ EasyAIoT Edge supports deployment on three major platforms: Linux / Mac / Window
   <img src=".image/公众号.jpg" alt="Official Account" width="30%">
 </div>
 
-## 🪐 Knowledge Planet
+## 💬 Technical Exchange Group
+
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+After following the official account, scan the QR code below with WeChat to join the EasyAIoT technical exchange group.
+</p>
+
+<div>
+  <img src=".image/交流群3群.jpg" alt="EasyAIoT Technical Exchange Group" width="30%">
+</div>
+
+## 💬 WeChat Contact
+
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+After following the official account, scan the QR code below to add us as a WeChat friend for one-on-one communication.
+</p>
+
+<div>
+  <img src=".image/微信联系方式.jpg" alt="WeChat Contact" width="200">
+</div>
+
+## 🪐 Knowledge Planet:
 
 <p>
   <img src=".image/知识星球.jpg" alt="Knowledge Planet" width="30%">
@@ -266,3 +286,14 @@ Soaring Xiongkulu/easyaiot-edge is open-sourced under the <a href="https://gitee
 <p style="font-size: 15px; line-height: 1.8; color: #333; margin: 15px 0;">
 <strong>Usage Permission</strong>: Individuals and enterprises can use it 100% free of charge, without needing to retain author or Copyright information. We believe that the value of technology lies in being widely used and continuously innovated, rather than being bound by copyright. We hope you can freely use, modify, and distribute this project, so that AI technology truly benefits everyone.
 </p>
+---
+
+## 🚀 Pure-Edge (standalone) One-Command Deployment
+
+This repository now ships the **pure-edge standalone form** extracted from the full platform (VIDEO + RUNTIME + WEB only, no cloud/Java/DEVICE services; middleware trimmed to PostgreSQL + Redis + SRS). See [EDGE_STANDALONE_MIGRATION.md](./EDGE_STANDALONE_MIGRATION.md) for scope.
+
+```bash
+./install.sh install          # middleware → RUNTIME → VIDEO → WEB → verify
+```
+
+Entry: `https://<host>:8888`, default account `admin / admin123` (no tenant, no captcha). Manage with `./install.sh status|logs|stop|start|restart|verify`.

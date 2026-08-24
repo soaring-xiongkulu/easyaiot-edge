@@ -19,6 +19,20 @@
   <a href="./README_zh.md">简体中文</a>
 </h4>
 
+## ⚡ 快速开始
+
+别眨眼——部署这件事，本来就应该像呼吸一样自然：
+
+```bash
+./install.sh install
+```
+
+对，就这一行。倒杯咖啡回来，摄像头接入、AI 分析、管理台已经全部就绪，连健康检查都替你做完了。
+
+然后打开 `https://<本机IP>:8888`，用 `admin / admin123` 登录——没有租户、没有验证码，输完账号密码直接进——边缘盒子就是你的主场。
+
+> 日常管理也一句话的事：`./install.sh status|logs|stop|start|restart|verify|clean`，比叫醒家里的智能音箱还简单。
+
 ## 💎 为什么值得关注
 
 | 你关心的 | 说明                                                                              |
@@ -185,16 +199,36 @@ EasyAIoT Edge 支持 Linux / Mac / Windows 三大平台部署（推荐 Linux 生
   <img src=".image/banner/banner1003.png" width="49%">
 </div>
 
-## 📞 联系方式（添加微信后，需关注公众号，拉入技术交流群）
+## 📞 联系方式
 
-<div>
-  <img src=".image/联系方式.jpg" alt="联系方式" width="30%" style="margin-right: 50px;">
-</div>
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+请先关注下方公众号，再通过技术交流群或微信号与我们联系。
+</p>
 
 ## 👥 公众号
 
 <div>
   <img src=".image/公众号.jpg" alt="公众号" width="30%">
+</div>
+
+## 💬 技术交流群
+
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+关注公众号后，使用微信扫描下方二维码加入 EasyAIoT 技术交流群。
+</p>
+
+<div>
+  <img src=".image/交流群3群.jpg" alt="EasyAIoT技术交流3群" width="30%">
+</div>
+
+## 💬 微信联系方式
+
+<p style="font-size: 14px; line-height: 1.8; color: #555; margin: 15px 0;">
+关注公众号后，如需一对一沟通，可扫描下方二维码添加微信好友。
+</p>
+
+<div>
+  <img src=".image/微信联系方式.jpg" alt="微信号联系方式" width="200">
 </div>
 
 ## 🪐 知识星球：
