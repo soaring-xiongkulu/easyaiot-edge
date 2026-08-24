@@ -1,6 +1,8 @@
 // 算法任务表格列定义
 import { BasicColumn, FormProps } from "@/components/Table";
 import { Tag } from "ant-design-vue";
+import { summarizeMatchingForList } from "@/views/camera/utils/libraryMatching";
+import { formatClusterRuntime, formatSchedulePolicy } from '@/utils/clusterRuntime';
 
 export function getBasicColumns(): BasicColumn[] {
   return [
@@ -12,11 +14,17 @@ export function getBasicColumns(): BasicColumn[] {
     {
       title: '任务类型',
       dataIndex: 'task_type',
-      width: 120,
-      customRender: ({ text }) => {
+      width: 160,
+      customRender: ({ text, record }) => {
+        const executor = String(record?.executor || 'python').toLowerCase();
+        const isCpp = executor === 'cpp' || executor === 'c++' || executor === 'runtime';
+        const base =
+          text === 'realtime' ? '实时视频分析' : text === 'patrol' ? '周期巡检分析' : '事件抓拍分析';
+        const label = isCpp ? `${base}（低时延）` : `${base}（全功能）`;
+        const color = text === 'realtime' ? 'blue' : text === 'patrol' ? 'purple' : 'green';
         return (
-          <Tag color={text === 'realtime' ? 'blue' : 'green'}>
-            {text === 'realtime' ? '实时算法任务' : '抓拍算法任务'}
+          <Tag color={isCpp ? 'orange' : color}>
+            {label}
           </Tag>
         );
       },
@@ -31,6 +39,18 @@ export function getBasicColumns(): BasicColumn[] {
         }
         return text.join(', ');
       },
+    },
+    {
+      title: '调度策略',
+      dataIndex: 'schedule_policy',
+      width: 110,
+      customRender: ({ text, record }) => formatSchedulePolicy(text, record),
+    },
+    {
+      title: '运行节点',
+      dataIndex: 'service_server_ip',
+      width: 180,
+      customRender: ({ record }) => formatClusterRuntime(record),
     },
     {
       title: '运行状态',
@@ -91,6 +111,43 @@ export function getBasicColumns(): BasicColumn[] {
       },
     },
     {
+      title: '告警标签',
+      dataIndex: 'alert_class_names',
+      width: 160,
+      customRender: ({ text }) => {
+        if (!text || !Array.isArray(text) || text.length === 0) {
+          return '--';
+        }
+        return text.slice(0, 3).map((name: string) => (
+          <Tag key={name}>{name}</Tag>
+        ));
+      },
+    },
+    {
+      title: '库匹配',
+      dataIndex: 'matching_business_tags',
+      width: 180,
+      customRender: ({ record }) => {
+        const summary = summarizeMatchingForList(record);
+        if (!summary) {
+          return '--';
+        }
+        return (
+          <Tag color={summary.mode === 'tags' ? 'green' : 'blue'}>{summary.text}</Tag>
+        );
+      },
+    },
+    {
+      title: '后处理',
+      dataIndex: 'post_process_enabled',
+      width: 90,
+      customRender: ({ text }) => (
+        <Tag color={text ? 'purple' : 'default'}>
+          {text ? '已开启' : '未开启'}
+        </Tag>
+      ),
+    },
+    {
       width: 200,
       title: '操作',
       dataIndex: 'action',
@@ -126,8 +183,9 @@ export function getFormConfig(): Partial<FormProps> {
           placeholder: '请选择任务类型',
           options: [
             { value: '', label: '全部' },
-            { value: 'realtime', label: '实时算法任务' },
-            { value: 'snap', label: '抓拍算法任务' },
+            { value: 'realtime', label: '实时视频分析' },
+            { value: 'snap', label: '事件抓拍分析' },
+            { value: 'patrol', label: '周期巡检分析' },
           ],
         },
       },

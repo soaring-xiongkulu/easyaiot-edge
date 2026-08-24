@@ -177,40 +177,19 @@
       </div>
     </BasicModal>
     
-    <!-- 抓拍图片查看模态框 -->
-    <SnapImageModal @register="registerSnapImageModal"/>
-    
     <!-- 摄像头选择模态框 -->
-    <BasicModal
+    <CameraStreamSelectModal
       v-model:open="cameraSelectVisible"
-      title="选择摄像头"
-      @ok="handleConfirmCamera"
-      @cancel="cameraSelectVisible = false"
-    >
-      <div v-if="cameraStreams.length === 0" style="text-align: center; padding: 20px;">
-        <Empty description="暂无可用推流地址" />
-      </div>
-      <RadioGroup v-else v-model:value="selectedCameraIndex" style="width: 100%;">
-        <Radio
-          v-for="(stream, index) in cameraStreams"
-          :key="stream.device_id"
-          :value="index"
-          style="display: block; margin-bottom: 12px;"
-        >
-          <div>
-            <div style="font-weight: 500;">{{ stream.device_name }}</div>
-            <div style="font-size: 12px; color: #999; margin-top: 4px;">
-              {{ stream.ai_http_stream || stream.pusher_http_url || stream.http_stream || stream.pusher_rtmp_url || stream.rtmp_stream || '无推流地址' }}
-            </div>
-          </div>
-        </Radio>
-      </RadioGroup>
-    </BasicModal>
+      :streams="cameraStreams"
+      :task-name="taskInfo?.task_name"
+      @confirm="playCameraStream"
+    />
   </BasicDrawer>
 </template>
 
 <script lang="ts" setup>
 import {computed, ref, nextTick} from 'vue';
+import {useRouter} from 'vue-router';
 import {BasicDrawer, useDrawerInner} from '@/components/Drawer';
 import {BasicTable, useTable} from '@/components/Table';
 import {
@@ -221,9 +200,10 @@ import {
   VideoCameraOutlined,
   FolderOutlined,
 } from '@ant-design/icons-vue';
-import {Tag, Button, Empty, Spin, RadioGroup, Radio} from 'ant-design-vue';
+import { Tag, Empty, Spin } from 'ant-design-vue';
 import {Icon} from '@/components/Icon';
 import {useMessage} from '@/hooks/web/useMessage';
+import {rewriteStreamHostToPageHost} from '@/views/camera/utils/devicePlay';
 import {
   type AlgorithmTask,
   type FrameExtractor,
@@ -245,22 +225,21 @@ import ServiceLogsModal from './ServiceLogsModal.vue';
 import {useModal} from '@/components/Modal';
 import {BasicModal} from '@/components/Modal';
 import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue';
-import SnapImageModal from '@/views/camera/components/SnapSpace/SnapImageModal.vue';
+import CameraStreamSelectModal from '../CameraStreamSelectModal/index.vue';
 import {getSnapSpaceByDeviceId, type SnapSpace} from '@/api/device/snap';
-
+import { Button } from '@/components/Button'
 defineOptions({name: 'ServiceManageDrawer'});
 
+const router = useRouter();
 const emit = defineEmits(['close', 'success']);
 
 const {createMessage} = useMessage();
 const [registerLogsModal, {openModal: openLogsModal}] = useModal();
 const [registerPlayerModal, {openModal: openPlayerModal}] = useModal();
-const [registerSnapImageModal, {openModal: openSnapImageModal}] = useModal();
 
 // 摄像头选择和播放相关
 const cameraSelectVisible = ref(false);
 const cameraStreams = ref<CameraStreamInfo[]>([]);
-const selectedCameraIndex = ref<number>(0);
 
 // 抓拍空间相关
 const snapSpacesVisible = ref(false);
@@ -278,6 +257,7 @@ const sorterInfo = ref<Sorter | null>(null);
 const pusherInfo = ref<Pusher | null>(null);
 const realtimeServiceInfo = ref<RealtimeServiceStatus | null>(null);
 const snapServiceInfo = ref<RealtimeServiceStatus | null>(null);
+const patrolServiceInfo = ref<RealtimeServiceStatus | null>(null);
 
 const drawerTitle = computed(() => {
   return '帧管道管理器';
@@ -422,6 +402,44 @@ const serviceList = computed(() => {
         console.log('添加默认抓拍服务项（无设备）:', defaultItem);
       list.push(defaultItem);
       }
+    }
+  }
+
+  // 巡检算法任务：显示统一巡检服务
+  if (taskInfo.value && taskInfo.value.task_type === 'patrol') {
+    const deviceNames = taskInfo.value.device_names || [];
+    const deviceNameStr = deviceNames.length > 0 ? deviceNames.join(', ') : undefined;
+
+    if (patrolServiceInfo.value) {
+      list.push({
+        id: `patrol_${taskInfo.value.id}`,
+        service_type: 'patrol',
+        service_name: '巡检算法服务',
+        device_name: deviceNameStr,
+        status: patrolServiceInfo.value.status || patrolServiceInfo.value.run_status || 'stopped',
+        server_ip: patrolServiceInfo.value.server_ip,
+        port: patrolServiceInfo.value.port,
+        process_id: patrolServiceInfo.value.process_id,
+        last_heartbeat: patrolServiceInfo.value.last_heartbeat,
+        log_path: patrolServiceInfo.value.log_path,
+        raw_data: patrolServiceInfo.value,
+        actionLoading: false,
+      });
+    } else {
+      list.push({
+        id: `patrol_${taskInfo.value.id}`,
+        service_type: 'patrol',
+        service_name: '巡检算法服务',
+        device_name: deviceNameStr,
+        status: 'stopped',
+        server_ip: undefined,
+        port: undefined,
+        process_id: undefined,
+        last_heartbeat: undefined,
+        log_path: undefined,
+        raw_data: null,
+        actionLoading: false,
+      });
     }
   }
 
@@ -618,6 +636,7 @@ const loadServiceInfo = async (taskId: number) => {
           // 即使 realtime_service 为 null，也要设置为 null（而不是 undefined）
           realtimeServiceInfo.value = servicesStatusResponse.data.realtime_service ?? null;
           snapServiceInfo.value = servicesStatusResponse.data.snap_service ?? null;
+          patrolServiceInfo.value = servicesStatusResponse.data.patrol_service ?? null;
           console.log('服务状态数据:', servicesStatusResponse.data);
           console.log('实时服务信息:', realtimeServiceInfo.value);
           console.log('实时服务信息类型:', typeof realtimeServiceInfo.value);
@@ -634,6 +653,7 @@ const loadServiceInfo = async (taskId: number) => {
         pusherInfo.value = statusData.pusher || null;
         realtimeServiceInfo.value = statusData.realtime_service ?? null;
         snapServiceInfo.value = statusData.snap_service ?? null;
+        patrolServiceInfo.value = statusData.patrol_service ?? null;
         console.log('服务状态数据（已转换）:', statusData);
         console.log('实时服务信息（已转换）:', realtimeServiceInfo.value);
         console.log('实时服务信息类型（已转换）:', typeof realtimeServiceInfo.value);
@@ -735,8 +755,11 @@ const handleViewLogs = async (record: any) => {
     return;
   }
 
-  // 对于抓拍算法任务，使用 'snap' 作为服务类型，但实际调用 realtime 日志接口
-  const serviceType = record.service_type === 'snap' ? 'realtime' : record.service_type;
+  // 对于抓拍/巡检算法任务，日志接口与实时算法共用 realtime 路径
+  const serviceType =
+    record.service_type === 'snap' || record.service_type === 'patrol'
+      ? 'realtime'
+      : record.service_type;
   
   openLogsModal(true, {
     title: `${record.service_name} - 日志`,
@@ -846,14 +869,9 @@ const handleViewSnapSpaces = async (record: any) => {
 };
 
 // 查看抓拍图片
-const handleViewSnapImages = (spaceId: number, deviceId: string, deviceName?: string) => {
-  // 关闭抓拍空间列表模态框
+const handleViewSnapImages = (spaceId: number, _deviceId: string, _deviceName?: string) => {
   snapSpacesVisible.value = false;
-  // 直接打开抓拍图片模态框
-  openSnapImageModal(true, {
-    space_id: spaceId,
-    space_name: deviceName || `设备 ${deviceId} 的抓拍空间`,
-  });
+  router.push({ path: `/snap-space-manage/${spaceId}`, query: { view: 'alerts' } });
 };
 
 // 启动服务（通过启动算法任务来启动服务）
@@ -1060,21 +1078,11 @@ const handlePlayStream = async () => {
     } else {
       // 多个摄像头，显示选择对话框
       cameraStreams.value = availableStreams;
-      selectedCameraIndex.value = 0;
       cameraSelectVisible.value = true;
     }
   } catch (error) {
     console.error('获取推流地址失败', error);
     createMessage.error('获取推流地址失败');
-  }
-};
-
-// 确认选择摄像头并播放
-const handleConfirmCamera = () => {
-  if (cameraStreams.value.length > 0 && selectedCameraIndex.value >= 0) {
-    const selectedStream = cameraStreams.value[selectedCameraIndex.value];
-    playCameraStream(selectedStream);
-    cameraSelectVisible.value = false;
   }
 };
 
@@ -1147,7 +1155,10 @@ const playCameraStream = (stream: CameraStreamInfo) => {
     createMessage.warning(`摄像头 ${stream.device_name} 暂无推流地址`);
     return;
   }
-  
+
+  // 帧管道管理器由当前 WEB nginx 代理 /ai、/live，禁止浏览器直连服务端返回的媒体节点地址
+  httpStream = rewriteStreamHostToPageHost(httpStream, { forcePageProxy: true });
+
   // 打开播放器
   openPlayerModal(true, {
     id: stream.device_id,
@@ -1340,4 +1351,3 @@ const [register] = useDrawerInner(async (data) => {
   }
 }
 </style>
-

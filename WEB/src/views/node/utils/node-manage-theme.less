@@ -1,0 +1,25 @@
+@import './theme.less';
+
+@manage-page-bg: #ffffff;
+@manage-divider: rgba(0, 0, 0, 0.06);
+@manage-section-gap: 36px;
+@manage-font-hero: 40px;
+@manage-font-title: 20px;
+@manage-card-shadow: 0 4px 24px rgba(38, 108, 251, 0.06);
+@manage-card-shadow-hover: 0 12px 40px rgba(38, 108, 251, 0.12);
+@manage-radius: 12px;
+
+.manage-stat-value() {
+  font-size: @manage-font-hero;
+  font-weight: 600;
+  color: @node-text-primary;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.manage-stat-label() {
+  font-size: @node-font-body;
+  color: @node-text-secondary;
+  margin-bottom: 8px;
+}

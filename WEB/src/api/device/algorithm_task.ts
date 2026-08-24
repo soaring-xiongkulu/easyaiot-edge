@@ -9,7 +9,7 @@ import {defHttp} from '@/utils/http/axios';
 const ALGORITHM_PREFIX = '/video/algorithm';
 
 // 通用请求封装
-const commonApi = <T = any>(method: 'get' | 'post' | 'delete' | 'put', url: string, options: { params?: any; data?: any; errorMessageMode?: 'none' | 'message' | 'modal' } = {}) => {
+const commonApi = <T = any>(method: 'get' | 'post' | 'delete' | 'put', url: string, options: { params?: any; data?: any; errorMessageMode?: 'none' | 'message' | 'modal'; timeout?: number } = {}) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
 
   return defHttp[method]({
@@ -18,6 +18,8 @@ const commonApi = <T = any>(method: 'get' | 'post' | 'delete' | 'put', url: stri
       // @ts-ignore
       ignoreCancelToken: true,
     },
+    // 单接口超时覆盖（默认全局 10s）：停止/启动/重启需要等待进程清理，耗时较长
+    ...(options.timeout ? { timeout: options.timeout } : {}),
     ...(method === 'get' ? { params: options.params } : { data: options.data || options.params }),
   }, {
     isTransformResponse: true,
@@ -30,7 +32,11 @@ export interface AlgorithmTask {
   id: number;
   task_name: string;
   task_code: string;
-  task_type: 'realtime' | 'snap'; // realtime:实时算法任务, snap:抓拍算法任务
+  task_type: 'realtime' | 'snap' | 'patrol';
+  /** 执行后端：python（默认）| cpp（本机 RUNTIME） */
+  executor?: 'python' | 'cpp' | string;
+  runtime_bin_path?: string;
+  runtime_control_port?: number;
   device_ids?: string[];
   device_names?: string[];
   pusher_id?: number;
@@ -38,8 +44,12 @@ export interface AlgorithmTask {
   // 模型配置（直接选择模型列表，不再依赖模型服务接口）
   model_ids?: number[]; // 关联的模型ID列表
   model_names?: string; // 关联的模型名称列表（逗号分隔，冗余字段，用于快速显示）
+  /** YOLO 检测置信度阈值（0~1，默认 0.5） */
+  detect_conf?: number;
   // 实时算法任务配置
   extract_interval?: number; // 抽帧间隔（每N帧抽一次）
+  motion_gate_enabled?: boolean;
+  motion_gate_config?: { preset?: string; [key: string]: unknown };
   // 追踪配置
   tracking_enabled?: boolean; // 是否启用目标追踪
   tracking_similarity_threshold?: number; // 追踪相似度阈值
@@ -47,6 +57,29 @@ export interface AlgorithmTask {
   tracking_smooth_alpha?: number; // 追踪平滑系数
   // 告警配置
   alert_event_enabled?: boolean; // 是否启用告警事件
+  alert_event_suppress_time?: number; // 告警事件抑制时间（秒），减轻 Kafka 积压
+  /** 告警触发类别标签：仅检测到所选标签时才触发告警 */
+  alert_class_names?: string[];
+  face_detection_enabled?: boolean; // 是否启用人脸检测
+  plate_detection_enabled?: boolean; // 是否启用车牌检测
+  face_matching_enabled?: boolean; // 是否启用人脸匹配（默认关闭）
+  face_library_ids?: number[]; // 关联人脸库（可多选）
+  face_library_names?: string[];
+  face_matching_threshold?: number; // 匹配阈值（可选，覆盖人脸库默认）
+  plate_matching_enabled?: boolean; // 是否启用车牌匹配（默认关闭）
+  plate_library_ids?: number[]; // 关联车牌库（可多选）
+  plate_library_names?: string[];
+  /** 匹配业务标签：非空时在所有标签相交的启用库中检索；留空则仅匹配关联库 */
+  matching_business_tags?: string[];
+  alert_notification_enabled?: boolean; // 是否启用告警通知
+  alert_notification_config?: {
+    channels: Array<{
+      method: string; // 通知方式: sms, email, wxcp, http, ding, feishu
+      template_id: string | number; // 模板ID
+      template_name?: string; // 模板名称
+    }>;
+  };
+  alarm_suppress_time?: number; // 告警通知抑制时间（秒）
   // 抓拍相关字段（仅抓拍算法任务）
   cron_expression?: string;
   frame_skip?: number;
@@ -61,9 +94,51 @@ export interface AlgorithmTask {
   last_process_time?: string;
   last_success_time?: string;
   algorithm_services?: AlgorithmModelService[]; // 保留以兼容旧数据
+  sam_supplement_enabled?: boolean;
+  sam_supplement_config?: {
+    pipeline_mode?: 'none' | 'refine_mask' | 'open_vocab' | 'alert_verify';
+    text_prompts?: string[];
+    conf?: number;
+    trigger?: 'always' | 'on_interval' | 'on_alert' | 'on_yolo_empty';
+    interval_frames?: number;
+    merge_iou?: number;
+    return_masks?: boolean;
+  };
+  /** 是否启用人体姿态分析 */
+  pose_analysis_enabled?: boolean;
+  /** 人体姿态分析配置 */
+  pose_analysis_config?: {
+    model_file_path?: string;
+    conf?: number;
+    trigger?: 'always' | 'on_interval' | 'on_person';
+    interval_frames?: number;
+  };
   service_names?: string; // 关联的算法服务名称列表（逗号分隔，冗余字段，用于快速显示）
   defense_mode?: string; // 布防模式: full(全防), half(半防), day(白天), night(夜间)
   defense_schedule?: string | number[][]; // 布防时段: JSON字符串或二维数组，7天×24小时
+  /** 调度策略: local(本机) | auto(自动调度) | node(指定节点) */
+  schedule_policy?: 'local' | 'auto' | 'node';
+  /** 自动调度时是否优先 GPU 节点 */
+  prefer_gpu?: boolean;
+  /** 指定部署节点 ID（schedule_policy=node 时） */
+  target_node_id?: number | null;
+  /** 实际运行节点 ID（只读，启动后由控制面写入） */
+  node_id?: number | null;
+  /** 是否启用 AI 后处理脚本 */
+  post_process_enabled?: boolean;
+  /** 后处理脚本文件名 */
+  post_process_script?: string;
+  /** 后处理 Worker 副本数 */
+  post_process_replicas?: number;
+  /** POST 定制后处理 pipeline JSON */
+  post_pipeline?: Array<{
+    plugin: string;
+    version?: string;
+    enabled?: boolean;
+    params?: Record<string, unknown>;
+    fail_strategy?: string;
+    endpoint?: string;
+  }> | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -93,6 +168,26 @@ export const getAlgorithmTask = (task_id: number) => {
   );
 };
 
+/** 本机 VIDEO 侧 RUNTIME 版本与就绪状态 */
+export interface RuntimeInfo {
+  ready?: boolean;
+  binPath?: string | null;
+  version?: string | null;
+  git?: string | null;
+  builtAt?: string | null;
+  arch?: string | null;
+  buildMode?: string | null;
+  ort?: string | null;
+  source?: string | null;
+  versionFile?: string | null;
+}
+
+export const getRuntimeInfo = () => {
+  return commonApi<RuntimeInfo>('get', `${ALGORITHM_PREFIX}/runtime/info`, {
+    errorMessageMode: 'none',
+  });
+};
+
 export const createAlgorithmTask = (data: {
   task_name: string;
   task_type?: 'realtime' | 'snap';
@@ -100,6 +195,8 @@ export const createAlgorithmTask = (data: {
   device_ids?: string[];
   // 模型配置
   model_ids?: number[];
+  /** YOLO 检测置信度阈值（0~1，默认 0.5） */
+  detect_conf?: number;
   // 实时算法任务配置
   extract_interval?: number;
   // 追踪配置
@@ -109,6 +206,25 @@ export const createAlgorithmTask = (data: {
   tracking_smooth_alpha?: number;
   // 告警配置
   alert_event_enabled?: boolean;
+  alert_event_suppress_time?: number;
+  alert_class_names?: string[];
+  face_detection_enabled?: boolean;
+  plate_detection_enabled?: boolean;
+  face_matching_enabled?: boolean;
+  face_library_ids?: number[];
+  face_matching_threshold?: number;
+  plate_matching_enabled?: boolean;
+  plate_library_ids?: number[];
+  matching_business_tags?: string[];
+  alert_notification_enabled?: boolean;
+  alert_notification_config?: {
+    channels: Array<{
+      method: string;
+      template_id: string | number;
+      template_name?: string;
+    }>;
+  };
+  alarm_suppress_time?: number;
   // 抓拍算法任务配置
   cron_expression?: string;
   frame_skip?: number;
@@ -116,6 +232,18 @@ export const createAlgorithmTask = (data: {
   is_enabled?: boolean;
   defense_mode?: string;
   defense_schedule?: string;
+  /** 是否启用人体姿态分析 */
+  pose_analysis_enabled?: boolean;
+  pose_analysis_config?: {
+    model_file_path?: string;
+    conf?: number;
+    trigger?: 'always' | 'on_interval' | 'on_person';
+    interval_frames?: number;
+  };
+  /** 是否启用 AI 后处理脚本，默认关闭 */
+  post_process_enabled?: boolean;
+  /** 后处理 Worker 副本数 */
+  post_process_replicas?: number;
 }) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
@@ -139,21 +267,24 @@ export const deleteAlgorithmTask = (task_id: number) => {
 export const startAlgorithmTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
-    `${ALGORITHM_PREFIX}/task/${task_id}/start`
+    `${ALGORITHM_PREFIX}/task/${task_id}/start`,
+    { timeout: 30000 }
   );
 };
 
 export const stopAlgorithmTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
-    `${ALGORITHM_PREFIX}/task/${task_id}/stop`
+    `${ALGORITHM_PREFIX}/task/${task_id}/stop`,
+    { timeout: 30000 }
   );
 };
 
 export const restartAlgorithmTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
     'post',
-    `${ALGORITHM_PREFIX}/task/${task_id}/restart`
+    `${ALGORITHM_PREFIX}/task/${task_id}/restart`,
+    { timeout: 30000 }
   );
 };
 
@@ -558,5 +689,164 @@ export const getTaskStreams = (task_id: number) => {
     'get',
     `${ALGORITHM_PREFIX}/task/${task_id}/streams`
   );
+};
+
+// ====================== AI 后处理 ======================
+export interface PostProcessStatus {
+  task_id: number;
+  post_process_enabled: boolean;
+  post_process_script: string;
+  script_exists: boolean;
+  workspace_path: string;
+  ide_url: string;
+  workspace_root: string;
+}
+
+export interface PostProcessIdeUrl {
+  ide_url: string;
+  task_id: number;
+  task_name: string;
+}
+
+export const getPostProcessStatus = (task_id: number) => {
+  return commonApi<{ code: number; msg: string; data: PostProcessStatus }>(
+    'get',
+    `${ALGORITHM_PREFIX}/task/${task_id}/post-process/status`,
+    { errorMessageMode: 'none' },
+  );
+};
+
+export const initPostProcessWorkspace = (task_id: number) => {
+  return commonApi<{ code: number; msg: string; data: Record<string, unknown> }>(
+    'post',
+    `${ALGORITHM_PREFIX}/task/${task_id}/post-process/init`,
+    { errorMessageMode: 'none' },
+  );
+};
+
+export const getPostProcessIdeUrl = (task_id: number) => {
+  return commonApi<PostProcessIdeUrl>(
+    'get',
+    `${ALGORITHM_PREFIX}/task/${task_id}/post-process/ide-url`,
+    { errorMessageMode: 'none' },
+  );
+};
+
+export const togglePostProcess = (
+  task_id: number,
+  enabled: boolean,
+  post_process_replicas?: number,
+) => {
+  return commonApi<{ code: number; msg: string; data: AlgorithmTask }>(
+    'put',
+    `${ALGORITHM_PREFIX}/task/${task_id}/post-process/toggle`,
+    {
+      data: {
+        enabled,
+        ...(post_process_replicas != null ? { post_process_replicas } : {}),
+      },
+      errorMessageMode: 'none',
+    },
+  );
+};
+
+export interface PostProcessResultItem {
+  id: number;
+  task_id: number;
+  task_name?: string;
+  task_type?: string;
+  device_id: string;
+  device_name?: string;
+  frame_number?: number;
+  event_time?: string;
+  counts?: Record<string, number>;
+  events?: Record<string, unknown>[];
+  alerts?: Record<string, unknown>[];
+  payload?: Record<string, unknown>;
+  correlation_id?: string;
+  created_at?: string;
+}
+
+export const listPostProcessResults = (
+  task_id: number,
+  params?: {
+    pageNo?: number;
+    pageSize?: number;
+    device_id?: string;
+    begin_datetime?: string;
+    end_datetime?: string;
+  },
+) => {
+  return commonApi<{
+    code: number;
+    msg: string;
+    items: PostProcessResultItem[];
+    total: number;
+    page_no: number;
+    page_size: number;
+  }>('get', `${ALGORITHM_PREFIX}/task/${task_id}/post-process/results`, {
+    params,
+    errorMessageMode: 'none',
+  });
+};
+
+// ====================== POST 后处理规则链 ======================
+export interface PostPipelineCatalogResponse {
+  builtins: Array<{
+    id: string;
+    name: string;
+    kinds: string[];
+    builtin: boolean;
+    description?: string;
+    params_schema?: Record<string, unknown>;
+    version?: string;
+  }>;
+  externals: Array<{
+    id: string;
+    name: string;
+    kinds: string[];
+    builtin: boolean;
+    description?: string;
+    params_schema?: Record<string, unknown>;
+    version?: string;
+    service?: Record<string, unknown>;
+  }>;
+}
+
+export interface PostPipelineDebugPayload {
+  pipeline_override?: AlgorithmTask['post_pipeline'];
+  until_plugin?: string;
+  task_id?: number;
+  task_name?: string;
+  task_type?: string;
+  device_ids?: string[];
+  event?: Record<string, unknown>;
+  regions?: Record<string, unknown>[];
+}
+
+export interface PostPipelineDebugResponse {
+  result?: string;
+  drop_reason?: string;
+  trace?: Array<Record<string, unknown>>;
+  alert_payload?: Record<string, unknown> | null;
+  error?: string;
+}
+
+export const getPostPipelineCatalog = () => {
+  return commonApi<PostPipelineCatalogResponse>(
+    'get',
+    `${ALGORITHM_PREFIX}/task/post-pipeline/catalog`,
+    { errorMessageMode: 'none' },
+  );
+};
+
+export const debugPostPipeline = (payload: PostPipelineDebugPayload, taskId?: number | null) => {
+  const url = taskId
+    ? `${ALGORITHM_PREFIX}/task/${taskId}/post-pipeline/debug`
+    : `${ALGORITHM_PREFIX}/task/post-pipeline/debug`;
+  return commonApi<PostPipelineDebugResponse>('post', url, {
+    data: payload,
+    errorMessageMode: 'none',
+  });
 };
 

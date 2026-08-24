@@ -1,0 +1,382 @@
+// 设备绑定/关联弹框 — 通栏撑满（覆盖全局 Modal content padding）
+.device-bind-modal {
+  .ant-modal {
+    top: 24px !important;
+    padding-bottom: 0 !important;
+    max-width: calc(100vw - 32px);
+  }
+
+  // 全局 Modal 有 padding: 8px !important，必须覆盖，否则四周会露出灰边
+  .ant-modal-content {
+    display: flex !important;
+    flex-direction: column !important;
+    height: calc(100vh - 48px) !important;
+    max-height: calc(100vh - 48px) !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff !important;
+    box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+  }
+
+  .ant-modal-header {
+    flex-shrink: 0;
+    margin: 0 !important;
+    padding: 0 !important;
+    border-bottom: 1px solid #f0f0f0;
+    background: #fff;
+  }
+
+  .ant-modal-close {
+    top: 22px;
+    right: 20px;
+  }
+
+  .ant-modal-body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    background: #fff !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .ant-modal-footer {
+    flex-shrink: 0;
+    margin: 0 !important;
+    padding: 16px 28px !important;
+    border-top: 1px solid #e8e8e8;
+    background: #fff;
+  }
+}
+
+.bind-modal-title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 22px 56px 18px 28px;
+
+  .bind-modal-title-main {
+    font-size: 22px;
+    font-weight: 600;
+    color: #141414;
+    line-height: 30px;
+    letter-spacing: -0.02em;
+  }
+
+  .bind-modal-title-sub {
+    font-size: 14px;
+    font-weight: 400;
+    color: #8c8c8c;
+    line-height: 22px;
+  }
+}
+
+.bind-modal-shell {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
+  background: #fff;
+}
+
+.bind-modal-context {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 12px 28px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  border-radius: 0;
+}
+
+.bind-modal-context-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 32px;
+}
+
+.bind-modal-context-item {
+  font-size: 14px;
+  color: #595959;
+  line-height: 22px;
+
+  strong {
+    margin-left: 8px;
+    color: #141414;
+    font-weight: 600;
+    font-size: 15px;
+  }
+}
+
+.bind-modal-context-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: #e6f4ff;
+  color: #1677ff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.bind-modal-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 16px 28px 20px;
+  background: #fff;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.bind-modal-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+  margin: 0;
+  background: #fff;
+}
+
+.bind-modal-sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 16px 12px 16px 20px;
+  background: #fff;
+  border: none;
+  border-right: 1px solid #f0f0f0;
+  border-radius: 0;
+  box-shadow: none;
+
+  // 左侧树：选中块左右撑满，与搜索框对齐
+  .ant-tree {
+    width: 100%;
+    background: transparent;
+  }
+
+  .ant-tree-list,
+  .ant-tree-list-holder,
+  .ant-tree-list-holder-inner {
+    width: 100% !important;
+  }
+
+  .ant-tree-treenode {
+    width: 100% !important;
+    padding: 0 0 4px !important;
+    align-items: stretch !important;
+  }
+
+  .ant-tree-switcher {
+    display: flex;
+    align-items: center;
+    width: 24px;
+    flex: none;
+  }
+
+  .ant-tree-node-content-wrapper {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    display: block !important;
+    padding: 6px 10px !important;
+    line-height: 22px !important;
+    border-radius: 6px !important;
+  }
+
+  .ant-tree-node-content-wrapper .ant-tree-title {
+    position: static !important;
+    left: auto !important;
+    width: 100% !important;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-tree-node-selected {
+    background: transparent !important;
+  }
+}
+
+.bind-modal-sidebar-title {
+  margin: 0 0 12px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #141414;
+}
+
+.bind-modal-sidebar-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+
+  // 覆盖 BasicTree 里 title absolute 导致选中块缩成文字宽度
+  .ant-tree {
+    width: 100%;
+    background: transparent;
+  }
+
+  .ant-tree-list,
+  .ant-tree-list-holder,
+  .ant-tree-list-holder-inner {
+    width: 100% !important;
+  }
+
+  .ant-tree-treenode {
+    width: 100% !important;
+    padding: 0 0 4px !important;
+    align-items: stretch !important;
+  }
+
+  .ant-tree-switcher {
+    display: flex;
+    align-items: center;
+    width: 24px;
+    flex: none;
+  }
+
+  .ant-tree-node-content-wrapper {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    display: block !important;
+    padding: 6px 10px !important;
+    line-height: 22px !important;
+    border-radius: 6px !important;
+  }
+
+  .ant-tree-node-content-wrapper .ant-tree-title {
+    position: static !important;
+    left: auto !important;
+    width: 100% !important;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-tree-node-selected {
+    background: transparent !important;
+  }
+}
+
+.bind-modal-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 28px 20px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.bind-modal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.bind-modal-search {
+  width: 360px;
+  max-width: 100%;
+}
+
+.bind-modal-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  // 右侧列表不出现内部滚动条，高度由分页控制
+  .ant-table-wrapper,
+  .ant-spin-nested-loading,
+  .ant-spin-container,
+  .ant-table,
+  .ant-table-container {
+    height: auto !important;
+  }
+
+  .ant-table-body {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+}
+
+.bind-modal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1;
+  min-height: 240px;
+  color: #8c8c8c;
+  font-size: 15px;
+}
+
+.bind-modal-empty-icon {
+  font-size: 48px;
+  color: #d9d9d9;
+}
+
+.bind-modal-empty-hint {
+  margin: 0;
+  font-size: 13px;
+  color: #bfbfbf;
+}
+
+.bind-modal-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+  flex-shrink: 0;
+}
+
+.bind-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.bind-modal-footer-extra {
+  font-size: 14px;
+  color: #8c8c8c;
+
+  strong {
+    margin: 0 6px;
+    color: #1677ff;
+    font-size: 20px;
+    font-weight: 600;
+  }
+}

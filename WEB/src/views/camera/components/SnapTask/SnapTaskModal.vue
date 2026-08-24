@@ -29,7 +29,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed } from 'vue';
+import { ref, computed, h } from 'vue';
 import { BasicDrawer, useDrawerInner } from '@/components/Drawer';
 import { BasicForm, useForm } from '@/components/Form';
 import { useMessage } from '@/hooks/web/useMessage';
@@ -47,6 +47,12 @@ import { getSnapSpaceList } from '@/api/device/snap';
 import { getDeviceList } from '@/api/device/camera';
 import { listPushers } from '@/api/device/algorithm_task';
 import RegionDrawer from '../RegionDrawer/index.vue';
+import CronExpressionField from '../AlgorithmTask/CronExpressionField.vue';
+import {
+  DEFAULT_SNAP_CRON,
+  getSnapCronHelpLines,
+  validateSnapCronMinInterval,
+} from '@/views/camera/utils/cronExpression';
 
 defineOptions({ name: 'SnapTaskModal' });
 
@@ -67,11 +73,13 @@ const pusherOptions = ref<Array<{ label: string; value: number }>>([]);
 // 加载空间列表
 const loadSpaces = async () => {
   try {
-    const response = await getSnapSpaceList({ pageNo: 1, pageSize: 1000 });
-    spaceOptions.value = (response.data || []).map((item) => ({
-      label: item.space_name,
-      value: item.id,
-    }));
+    const response = await getSnapSpaceList({ pageNo: 1, pageSize: 1000, scope: 'leaves' });
+    spaceOptions.value = (response.data || [])
+      .filter((item) => item.id != null)
+      .map((item) => ({
+        label: item.space_name,
+        value: item.id!,
+      }));
   } catch (error) {
     console.error('加载空间列表失败', error);
   }
@@ -153,10 +161,17 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
       label: 'Cron表达式',
       component: 'Input',
       required: true,
-      componentProps: {
-        placeholder: '例如: 0 */5 * * * * (每5分钟)',
-      },
-      helpMessage: '标准Cron表达式，例如: 0 */5 * * * * 表示每5分钟执行一次',
+      helpMessage: getSnapCronHelpLines(),
+      helpComponentProps: { maxWidth: '480px' },
+      render: ({ model }) =>
+        h(CronExpressionField, {
+          modelValue: model.cron_expression,
+          disabled: modalData.value?.type === 'view',
+          'onUpdate:modelValue': (value: string) => {
+            model.cron_expression = value;
+            setFieldsValue({ cron_expression: value });
+          },
+        }),
     },
     {
       field: 'frame_skip',
@@ -232,6 +247,37 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema, getF
         checkedChildren: '是',
         unCheckedChildren: '否',
       },
+    },
+    {
+      field: 'alarm_type',
+      label: '告警类型',
+      component: 'Select',
+      componentProps: {
+        options: [
+          { label: '短信告警', value: 0 },
+          { label: '邮箱告警', value: 1 },
+          { label: '短信+邮箱', value: 2 },
+        ],
+      },
+      ifShow: ({ values }) => values.alarm_enabled,
+    },
+    {
+      field: 'phone_number',
+      label: '告警手机号',
+      component: 'Input',
+      componentProps: {
+        placeholder: '多个手机号用英文逗号分割',
+      },
+      ifShow: ({ values }) => values.alarm_enabled && (values.alarm_type === 0 || values.alarm_type === 2),
+    },
+    {
+      field: 'email',
+      label: '告警邮箱',
+      component: 'Input',
+      componentProps: {
+        placeholder: '多个邮箱用英文逗号分割',
+      },
+      ifShow: ({ values }) => values.alarm_enabled && (values.alarm_type === 1 || values.alarm_type === 2),
     },
     {
       field: 'pusher_id',
@@ -325,6 +371,9 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       algorithm_threshold: data.record.algorithm_threshold,
       algorithm_night_mode: data.record.algorithm_night_mode,
       alarm_enabled: data.record.alarm_enabled,
+      alarm_type: data.record.alarm_type,
+      phone_number: data.record.phone_number,
+      email: data.record.email,
       auto_filename: data.record.auto_filename,
       custom_filename_prefix: data.record.custom_filename_prefix,
     });
@@ -345,6 +394,9 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
       algorithm_threshold: data.record.algorithm_threshold,
       algorithm_night_mode: data.record.algorithm_night_mode,
       alarm_enabled: data.record.alarm_enabled,
+      alarm_type: data.record.alarm_type,
+      phone_number: data.record.phone_number,
+      email: data.record.email,
       pusher_id: data.record.pusher_id,
       auto_filename: data.record.auto_filename,
       custom_filename_prefix: data.record.custom_filename_prefix,
@@ -352,6 +404,15 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
     setDrawerProps({ showOkBtn: false });
     // 加载检测区域
     await loadRegions(data.record.id);
+  } else {
+    const defaults: Record<string, unknown> = { cron_expression: DEFAULT_SNAP_CRON };
+    if (data?.space_id != null) {
+      defaults.space_id = data.space_id;
+    }
+    if (data?.device_id) {
+      defaults.device_id = data.device_id;
+    }
+    await setFieldsValue(defaults);
   }
 });
 
@@ -368,6 +429,18 @@ const updateFormValues = () => {
 const handleSubmit = async () => {
   try {
     const values = await validate();
+
+    if (values.cron_expression) {
+      const cronCheck = validateSnapCronMinInterval(values.cron_expression);
+      if (!cronCheck.valid) {
+        createMessage.error(cronCheck.message || 'Cron 表达式无效');
+        return;
+      }
+      if (cronCheck.normalized) {
+        values.cron_expression = cronCheck.normalized;
+      }
+    }
+
     setDrawerProps({ confirmLoading: true });
     
     if (modalData.value.type === 'edit' && modalData.value.record) {

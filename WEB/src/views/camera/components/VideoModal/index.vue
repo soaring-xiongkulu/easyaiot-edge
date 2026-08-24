@@ -10,34 +10,17 @@
   >
     <div class="product-modal">
       <Spin :spinning="state.editLoading">
-        <!-- ONVIF组件 -->
-        <Form
-          :labelCol="{ span: 6 }"
-          :model="validateInfos"
-          :wrapperCol="{ span: 16 }"
-          v-if="state.type=='onvif' && !state.isView && !state.isEdit"
-        >
-          <BasicTable @register="registerTable">
+        <!-- 单机局域网 ONVIF 发现：GET /video/camera/discovery -->
+        <div v-if="state.type === 'onvif'" class="onvif-scan-modal-body">
+          <BasicTable @register="registerOnvifTable">
             <template #bodyCell="{ column, record }">
               <template v-if="column.dataIndex === 'action'">
-                <TableAction
-                  :stopButtonPropagation="true"
-                  :actions="[
-                    {
-                      icon: 'famicons:bag-add-outline',
-                      tooltip: {
-                        title: '注册设备',
-                        placement: 'top',
-                      },
-                      label: '注册设备',
-                      onClick: openRegisterModal.bind(null, true, { record })
-                    },
-                  ]"
-                />
+                <Button type="link" size="small" @click="openRegisterModal(record)">注册</Button>
               </template>
             </template>
           </BasicTable>
-        </Form>
+          <VideoRegisterModal @register="registerVideoRegisterModal" @success="handleRegisterSuccess" />
+        </div>
         <!-- 直连设备表单（新增：摄像头类型选择） -->
         <Form
           :labelCol="{ span: 6 }"
@@ -225,30 +208,52 @@
                 />
               </FormItem>
             </Col>
+            <Col :span="12" v-if="isNvrChannel && modelRef.nvr_channel">
+              <FormItem label="NVR通道号">
+                <Input :value="`CH${modelRef.nvr_channel}`" disabled />
+              </FormItem>
+            </Col>
+            <Col :span="12" v-else-if="state.isView && modelRef.nvr_label">
+              <FormItem label="所属NVR">
+                <Input :value="modelRef.nvr_label" disabled />
+              </FormItem>
+            </Col>
+            <Col :span="24" v-if="!state.isView && !isNvrChannel">
+              <NvrMountFields
+                v-model:nvr-id="modelRef.nvr_id"
+                v-model:nvr-channel="modelRef.nvr_channel"
+                v-model:nvr="modelRef.nvr"
+              />
+            </Col>
+            <Col v-if="state.isView" :span="24">
+              <FormItem label="地图坐标">
+                <Input :value="locationSummaryText" disabled placeholder="未设置" />
+                <div class="location-hint">修改坐标请在设备列表中点击「设置坐标」</div>
+              </FormItem>
+            </Col>
           </Row>
         </Form>
       </Spin>
-      <VideoRegisterModal title="注册设备" @register="registerRegisterModel"
-                          @success="handleRegisterSuccess"/>
     </div>
   </BasicModal>
 </template>
 <script lang="ts" setup>
-import {computed, reactive, ref} from 'vue';
+import {computed, nextTick, reactive, ref} from 'vue';
+import { formatLocationSummary } from '@/views/camera/utils/deviceLocation';
+import { isNvrChannelDevice } from '@/views/camera/utils/deviceLabel';
 import {BasicModal, useModal, useModalInner} from '@/components/Modal';
+import {BasicTable, useTable} from '@/components/Table';
+import VideoRegisterModal from '../VideoRegisterModal/index.vue';
+import NvrMountFields from '../NvrMountFields/index.vue';
+import { Button } from '@/components/Button';
 import {Col, Form, FormItem, Input, Row, Select, Spin,} from 'ant-design-vue';
 import {CopyOutlined} from '@ant-design/icons-vue';
 import {useMessage} from '@/hooks/web/useMessage';
 import {copyText} from '@/utils/copyTextToClipboard';
-// 导入新的API函数
-import {discoverDevices, getDeviceList, registerDevice, updateDevice} from "@/api/device/camera";
+import {discoverDevices, registerDevice, registerDeviceByOnvif, updateDevice} from "@/api/device/camera";
+import {getOnvifBasicColumns, getOnvifFormConfig} from './Data';
 import {ensureDeviceStreamForwardTask} from "@/api/device/stream_forward";
-import {BasicTable, TableAction, useTable} from "@/components/Table";
-import {getOnvifBasicColumns, getOnvifFormConfig} from "./Data";
-import VideoRegisterModal from "../VideoRegisterModal/index.vue";
-
-const [registerRegisterModel, {openModal: openRegisterModal}] = useModal();
-
+import { buildBrandRtspUrl, resolveRegisteredDeviceId } from '@/views/camera/utils/rtspUrl';
 defineOptions({name: 'VideoModal'})
 
 const {createMessage} = useMessage();
@@ -306,11 +311,98 @@ const modelRef = reactive({
   support_move: '',
   support_zoom: '',
   cameraType: 'custom', // 摄像头类型：custom, hikvision, dahua, uniview
+  nvr_id: null as number | null,
+  nvr_channel: 0,
+  nvr: null as Record<string, unknown> | null,
+  nvr_label: '',
+  longitude: null as number | null,
+  latitude: null as number | null,
 });
 
+const locationSummaryText = computed(() =>
+  formatLocationSummary({
+    longitude: modelRef.longitude,
+    latitude: modelRef.latitude,
+  }),
+);
+
+/** NVR 下挂载的通道设备不可改挂其他 NVR */
+const isNvrChannel = computed(() =>
+  isNvrChannelDevice({
+    device_kind: (state.record as { device_kind?: string } | null)?.device_kind,
+    nvr_id: modelRef.nvr_id ?? (state.record as { nvr_id?: number } | null)?.nvr_id,
+  }),
+);
 
 const getTitle = computed(() => {
+  if (state.type === 'onvif') {
+    return '扫描局域网ONVIF设备';
+  }
+  if (state.type === 'source' && !state.isEdit && !state.isView) {
+    return '新增直连设备';
+  }
   return state.isEdit ? '编辑视频设备' : state.isView ? '查看视频设备' : '新增视频设备';
+});
+
+function stripNvrMountFromPayload(data: Record<string, unknown>) {
+  delete data.nvr;
+  delete data.nvr_id;
+  delete data.nvr_channel;
+  delete data.nvr_label;
+}
+
+function stripReadOnlyFromPayload(data: Record<string, unknown>) {
+  delete data.location_source;
+  delete data.location_updated_at;
+  delete data.has_location;
+  delete data.nvr_label;
+}
+
+/** 坐标仅在「设置坐标」抽屉中维护，编辑设备时不通过本表单提交 */
+function stripLocationFromPayload(data: Record<string, unknown>) {
+  delete data.longitude;
+  delete data.latitude;
+  delete data.altitude;
+  delete data.address;
+  delete data.heading;
+  delete data.location_source;
+  delete data.location_updated_at;
+  delete data.has_location;
+}
+
+/** 规范化布尔字段：空字符串转为 false，确保后端布尔字段不报错 */
+function normalizeBoolFields(data: Record<string, unknown>) {
+  const boolFields = ['support_move', 'support_zoom', 'enable_forward'];
+  for (const field of boolFields) {
+    if (field in data) {
+      const val = data[field];
+      if (val === '' || val === null || val === undefined) {
+        data[field] = false;
+      } else if (typeof val === 'string') {
+        data[field] = val === 'true' || val === '1' || val === 'yes';
+      }
+    }
+  }
+}
+
+const [registerVideoRegisterModal, {openModal: openVideoRegisterModal}] = useModal();
+
+const [registerOnvifTable, {reload: reloadOnvifTable}] = useTable({
+  canResize: true,
+  showIndexColumn: false,
+  title: '发现的设备',
+  api: discoverDevices,
+  columns: getOnvifBasicColumns(),
+  useSearchForm: true,
+  showTableSetting: false,
+  formConfig: getOnvifFormConfig(),
+  fetchSetting: {
+    listField: 'data',
+    totalField: 'total',
+  },
+  pagination: false,
+  rowKey: 'ip',
+  immediate: false,
 });
 
 const [register, {closeModal}] = useModalInner(async (data) => {
@@ -318,6 +410,12 @@ const [register, {closeModal}] = useModalInner(async (data) => {
   state.isEdit = isEdit;
   state.isView = isView;
   state.type = type;
+  state.record = record ?? null;
+
+  if (type === 'onvif') {
+    await nextTick();
+    reloadOnvifTable();
+  }
 
   // 如果是新增直连设备，重置相关字段
   if (type === 'source' && !isEdit && !isView) {
@@ -329,71 +427,22 @@ const [register, {closeModal}] = useModalInner(async (data) => {
     modelRef.source = '';
     modelRef.name = '';
     modelRef.stream = 0;
+    modelRef.nvr_id = null;
+    modelRef.nvr_channel = 0;
+    modelRef.nvr = null;
   }
 
   // 更新验证规则
-  Object.assign(rulesRef, getRules());
+  applyRules();
 
   if (state.isEdit || state.isView) {
     modelEdit(record);
     // 编辑/查看时也需要更新验证规则
-    Object.assign(rulesRef, getRules());
+    applyRules();
   }
 });
 
 const emits = defineEmits(['success']);
-
-const checkedKeys = ref<Array<string>>([]);
-
-function onSelect(record, selected) {
-  if (selected) {
-    checkedKeys.value = [...checkedKeys.value, record.ip];
-  } else {
-    checkedKeys.value = checkedKeys.value.filter((ip) => ip !== record.ip);
-  }
-}
-
-function onSelectAll(selected, selectedRows, changeRows) {
-  const changeIds = changeRows.map((item) => item.ip);
-  if (selected) {
-    checkedKeys.value = [...checkedKeys.value, ...changeIds];
-  } else {
-    checkedKeys.value = checkedKeys.value.filter((ip) => {
-      return !changeIds.includes(ip);
-    });
-  }
-}
-
-const [
-  registerTable, {reload}
-] = useTable({
-  canResize: false,
-  showIndexColumn: false,
-  title: null,
-  api: discoverDevices,
-  columns: getOnvifBasicColumns(),
-  useSearchForm: true,
-  showTableSetting: false,
-  formConfig: getOnvifFormConfig(),
-  fetchSetting: {
-    listField: 'list',
-    totalField: 'total',
-  },
-  rowSelection: {
-    type: 'checkbox',
-    selectedRowKeys: checkedKeys,
-    onSelect: onSelect,
-    onSelectAll: onSelectAll,
-    getCheckboxProps(record) {
-      if (record.default || record.referencedByDevice) {
-        return {disabled: true};
-      } else {
-        return {disabled: false};
-      }
-    },
-  },
-  rowKey: 'ip',
-});
 
 // 动态验证规则函数
 const getRules = () => {
@@ -406,10 +455,12 @@ const getRules = () => {
 
   // 根据摄像头类型动态设置验证规则
   if (modelRef.cameraType === 'custom') {
-    // 自定义类型：source必填，ip和port不需要验证
+    // 自定义类型：source必填，其余连接字段不参与校验
     baseRules.source = [{required: true, message: '请输入RTSP取流地址', trigger: ['change']}];
     baseRules.ip = [];
     baseRules.port = [];
+    baseRules.username = [];
+    baseRules.password = [];
   } else if (modelRef.cameraType === 'hikvision' || modelRef.cameraType === 'dahua' || modelRef.cameraType === 'uniview') {
     // 海康/大华/宇视类型：ip、port、username、password必填，source自动生成不需要验证
     baseRules.ip = [
@@ -499,6 +550,28 @@ const getRules = () => {
   return baseRules;
 };
 
+/** 替换校验规则，避免 Object.assign 残留旧类型字段规则 */
+function applyRules() {
+  const nextRules = getRules();
+  Object.keys(rulesRef).forEach((key) => {
+    if (!(key in nextRules)) {
+      delete rulesRef[key];
+    }
+  });
+  Object.assign(rulesRef, nextRules);
+}
+
+/** 新增直连设备时仅校验当前类型可见字段 */
+function getDirectDeviceValidateFields(): string[] {
+  if (modelRef.cameraType === 'custom') {
+    return ['cameraType', 'source', 'name'];
+  }
+  if (modelRef.cameraType === 'hikvision' || modelRef.cameraType === 'dahua' || modelRef.cameraType === 'uniview') {
+    return ['cameraType', 'name', 'ip', 'port', 'username', 'password'];
+  }
+  return ['cameraType', 'name'];
+}
+
 const rulesRef = reactive(getRules());
 
 function handleCLickChange(value) {
@@ -543,38 +616,33 @@ function handleCameraTypeChange(value) {
   }
   
   // 更新验证规则
-  Object.assign(rulesRef, getRules());
+  applyRules();
   // 清除验证错误，但不重置字段值
   clearValidate();
 }
 
 // 生成RTSP地址（海康/大华/宇视）
 function generateRtspUrl() {
-  if (modelRef.cameraType === 'hikvision') {
-    // 海康威视RTSP地址格式：rtsp://username:password@ip:port/Streaming/Channels/10X
-    // X: 1=主码流, 2=子码流
-    // 前端streamList: 0=主码流, 1=子码流
-    if (modelRef.ip && modelRef.port && modelRef.username && modelRef.password) {
-      const streamType = modelRef.stream === 0 ? 1 : (modelRef.stream === 1 ? 2 : 1);
-      modelRef.source = `rtsp://${modelRef.username}:${modelRef.password}@${modelRef.ip}:${modelRef.port}/Streaming/Channels/10${streamType}`;
-    }
-  } else if (modelRef.cameraType === 'dahua') {
-    // 大华RTSP地址格式：rtsp://username:password@ip:port/cam/realmonitor?channel=1&subtype=X
-    // X: 0=主码流, 1=辅码流
-    // 前端streamList: 0=主码流, 1=子码流
-    if (modelRef.ip && modelRef.port && modelRef.username && modelRef.password) {
-      const streamType = modelRef.stream === 0 ? 0 : (modelRef.stream === 1 ? 1 : 0);
-      modelRef.source = `rtsp://${modelRef.username}:${modelRef.password}@${modelRef.ip}:${modelRef.port}/cam/realmonitor?channel=1&subtype=${streamType}`;
-    }
-  } else if (modelRef.cameraType === 'uniview') {
-    // 宇视RTSP地址格式：rtsp://username:password@ip:port/unicast/c<通道号>/s<码流类型>/live
-    // 码流类型: 0=主码流, 1=辅码流
-    // 前端streamList: 0=主码流, 1=子码流
-    if (modelRef.ip && modelRef.port && modelRef.username && modelRef.password) {
-      const streamType = modelRef.stream === 0 ? 0 : (modelRef.stream === 1 ? 1 : 0);
-      const channel = 1; // 默认通道1
-      modelRef.source = `rtsp://${modelRef.username}:${modelRef.password}@${modelRef.ip}:${modelRef.port}/unicast/c${channel}/s${streamType}/live`;
-    }
+  if (
+    modelRef.cameraType !== 'hikvision'
+    && modelRef.cameraType !== 'dahua'
+    && modelRef.cameraType !== 'uniview'
+  ) {
+    return;
+  }
+  if (!modelRef.ip || !modelRef.port || !modelRef.username || !modelRef.password) {
+    return;
+  }
+  const url = buildBrandRtspUrl({
+    cameraType: modelRef.cameraType,
+    ip: modelRef.ip,
+    port: parseInt(String(modelRef.port), 10) || 554,
+    username: modelRef.username,
+    password: modelRef.password,
+    stream: modelRef.stream ?? 0,
+  });
+  if (url) {
+    modelRef.source = url;
   }
 }
 
@@ -592,66 +660,6 @@ function handleCopyRtsp() {
     return;
   }
   copyText(modelRef.source, 'RTSP地址已复制到剪贴板');
-}
-
-function handleRegisterSuccess(value) {
-  const ip = value['ip'];
-  const name = value['name'];
-  const stream = value['stream'];
-  const username = value['username'];
-  const password = value['password'];
-  if (ip == null || ip === '') {
-    createMessage.error('IP地址不能为空');
-    return;
-  }
-  if (name == null || name === '') {
-    createMessage.error('设备名称不能为空');
-    return;
-  }
-  if (username == null || username === '' || password === null || password === '') {
-    createMessage.error('用户名与密码不能为空');
-    return;
-  }
-
-  state.editLoading = true;
-
-  if (state.type === 'onvif') {
-    let port = 80;
-    let arr = ip.split(":");
-    if (arr.length > 1) {
-      port = arr[1];
-    }
-    modelRef.ip = arr[0];
-    modelRef.port = port;
-    modelRef.name = name;
-    modelRef.stream = stream;
-    modelRef.username = username;
-    modelRef.password = password;
-
-    registerDevice(modelRef)
-      .then(async (response) => {
-        const deviceId = response?.data?.id;
-        createMessage.success('设备注册成功');
-        
-        // 检查并确保推流转发任务存在
-        if (deviceId) {
-          try {
-            await ensureDeviceStreamForwardTask(deviceId);
-          } catch (error) {
-            // 静默处理，不影响主流程
-            console.warn('检查推流转发任务失败:', error);
-          }
-        }
-        
-        closeModal();
-        resetFields();
-        emits('success');
-      })
-      .finally(() => {
-        state.editLoading = false;
-      });
-    return;
-  }
 }
 
 const useForm = Form.useForm;
@@ -689,13 +697,51 @@ function handleCancel() {
   resetFields();
 }
 
-function handleOk() {
-  if (state.type == 'onvif') {
-    closeModal();
-    resetFields();
+function openRegisterModal(record: Record<string, unknown>) {
+  openVideoRegisterModal(true, {record});
+}
+
+async function handleRegisterSuccess(payload: Record<string, unknown>) {
+  const ip = String(payload.ip ?? '');
+  const username = String(payload.username ?? '').trim();
+  const password = String(payload.password ?? '');
+  if (!ip || !password) {
+    createMessage.error('IP 或密码不能为空');
     return;
   }
+  if (!username) {
+    createMessage.error('用户名不能为空');
+    return;
+  }
+  const rawPort = payload.port;
+  const port = rawPort !== undefined && rawPort !== null && rawPort !== ''
+    ? Number(rawPort)
+    : 80;
+  state.editLoading = true;
+  try {
+    await registerDeviceByOnvif({
+      ip,
+      port: Number.isFinite(port) ? port : 80,
+      username,
+      password,
+    });
+    createMessage.success('设备注册成功');
+    closeModal();
+    resetFields();
+    emits('success');
+  } catch (error: unknown) {
+    const err = error as { msg?: string; message?: string };
+    createMessage.error(err?.msg || err?.message || '注册失败');
+  } finally {
+    state.editLoading = false;
+  }
+}
 
+function handleOk() {
+  if (state.type === 'onvif') {
+    closeModal();
+    return;
+  }
   // 直连设备特殊处理：直接注册，不再通过ONVIF搜索
   if (state.type === 'source' && !state.isEdit && !state.isView) {
     // 先进行自定义验证
@@ -737,10 +783,10 @@ function handleOk() {
     }
 
     // 更新验证规则以确保使用最新的规则
-    Object.assign(rulesRef, getRules());
+    applyRules();
 
-    // 执行表单验证
-    validate().then(async () => {
+    // 仅校验当前摄像头类型对应的字段，避免隐藏字段残留规则导致失败
+    validate(getDirectDeviceValidateFields()).then(async () => {
       state.editLoading = true;
       try {
         // 如果是海康、大华或宇视类型，确保RTSP地址已生成
@@ -772,7 +818,7 @@ function handleOk() {
 
         // 直接调用注册接口，传入source字段
         const response = await registerDevice(registerData);
-        const deviceId = response?.data?.id;
+        const deviceId = resolveRegisteredDeviceId(response);
         createMessage.success('设备注册成功');
         
         // 检查并确保推流转发任务存在
@@ -795,14 +841,15 @@ function handleOk() {
         state.editLoading = false;
       }
     }).catch((err) => {
-      createMessage.error('表单验证失败');
+      const firstError = err?.errorFields?.[0]?.errors?.[0];
+      createMessage.error(firstError || '表单验证失败');
       console.error(err);
     });
     return;
   }
 
   // 更新验证规则以确保使用最新的规则
-  Object.assign(rulesRef, getRules());
+  applyRules();
 
   validate().then(async () => {
     state.editLoading = true;
@@ -820,6 +867,12 @@ function handleOk() {
         if (state.type === 'source' && modelRef.cameraType === 'custom') {
           updateData.cameraType = 'custom';
         }
+        if (isNvrChannel.value) {
+          stripNvrMountFromPayload(updateData);
+        }
+        stripReadOnlyFromPayload(updateData);
+        stripLocationFromPayload(updateData);
+        normalizeBoolFields(updateData);
         await updateDevice(modelRef.id, updateData);
       } else if (state.type === 'camera') {
         // 摄像头处理
@@ -833,10 +886,18 @@ function handleOk() {
           if (modelRef.cameraType === 'custom') {
             updateData.cameraType = 'custom';
           }
+          if (isNvrChannel.value) {
+            stripNvrMountFromPayload(updateData);
+          }
+          stripReadOnlyFromPayload(updateData);
+          stripLocationFromPayload(updateData);
+          normalizeBoolFields(updateData);
           await updateDevice(modelRef.id, updateData);
         } else {
-          const response = await registerDevice(modelRef);
-          const deviceId = response?.data?.id;
+          const saveData = {...modelRef};
+          normalizeBoolFields(saveData);
+          const response = await registerDevice(saveData);
+          const deviceId = resolveRegisteredDeviceId(response);
           
           // 检查并确保推流转发任务存在
           if (deviceId) {
@@ -850,8 +911,10 @@ function handleOk() {
         }
       } else if (state.type === 'source') {
         // 独立摄像头处理
-        const response = await registerDevice(modelRef);
-        const deviceId = response?.data?.id;
+        const saveData = {...modelRef};
+        normalizeBoolFields(saveData);
+        const response = await registerDevice(saveData);
+        const deviceId = resolveRegisteredDeviceId(response);
         
         // 检查并确保推流转发任务存在
         if (deviceId) {
@@ -874,6 +937,12 @@ function handleOk() {
           if (modelRef.cameraType === 'custom') {
             updateData.cameraType = 'custom';
           }
+          if (isNvrChannel.value) {
+            stripNvrMountFromPayload(updateData);
+          }
+          stripReadOnlyFromPayload(updateData);
+          stripLocationFromPayload(updateData);
+          normalizeBoolFields(updateData);
           await updateDevice(modelRef.id, updateData);
           
           // 检查并确保推流转发任务存在
@@ -884,8 +953,10 @@ function handleOk() {
             console.warn('检查推流转发任务失败:', error);
           }
         } else {
-          const response = await registerDevice(modelRef);
-          const deviceId = response?.data?.id;
+          const saveData = {...modelRef};
+          normalizeBoolFields(saveData);
+          const response = await registerDevice(saveData);
+          const deviceId = resolveRegisteredDeviceId(response);
           
           // 检查并确保推流转发任务存在
           if (deviceId) {
@@ -913,7 +984,8 @@ function handleOk() {
       state.editLoading = false;
     }
   }).catch((err) => {
-    createMessage.error('表单验证失败');
+    const firstError = err?.errorFields?.[0]?.errors?.[0];
+    createMessage.error(firstError || '表单验证失败');
     console.error(err);
   });
 }
@@ -941,6 +1013,10 @@ function handleOk() {
     }
   }
   
+  .onvif-scan-modal-body {
+    min-height: 200px;
+  }
+
   .rtsp-copy-icon {
     color: #1890ff;
     font-size: 16px;
@@ -959,6 +1035,13 @@ function handleOk() {
       color: #096dd9;
       transform: scale(0.95);
     }
+  }
+
+  .location-hint {
+    margin-top: 4px;
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.45);
+    line-height: 1.5;
   }
 }
 </style>

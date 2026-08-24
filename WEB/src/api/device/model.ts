@@ -35,16 +35,6 @@ export const createModel = (params) => {
   return commonApi('post', `${Api.Model}/create`, {data: params});
 };
 
-/** 云端模型目录（需 AI 服务配置 EDGE_CLOUD_MODEL_API_BASE） */
-export const listCloudModelCatalog = () => {
-  return commonApi('get', `${Api.Model}/cloud/catalog`, {});
-};
-
-/** 按云端模型 id 拉取文件并写入本地存储、登记模型记录 */
-export const syncModelFromCloud = (remoteId: number) => {
-  return commonApi('post', `${Api.Model}/sync_from_cloud`, {data: {remote_id: remoteId}});
-};
-
 export const updateModel = (params) => {
   return commonApi('put', `${Api.Model}/${params["id"]}/update`, {data: params});
 };
@@ -57,8 +47,37 @@ export const getModelDetail = (modelId) => {
   return commonApi('get', `${Api.Model}/${modelId}`);
 };
 
+export const getModelClasses = (modelId) => {
+  return commonApi('get', `${Api.Model}/${modelId}/classes`);
+};
+
+/** 兼容 defHttp 解包前后多种响应结构 */
+export function parseModelClassPayload(resp: any): { classNames: string[]; selectedClassNames: string[] } {
+  if (!resp) {
+    return { classNames: [], selectedClassNames: [] };
+  }
+  let payload = resp;
+  if (resp.code === 0 && resp.data) {
+    payload = resp.data;
+  } else if (resp.data?.class_names || resp.data?.classNames) {
+    payload = resp.data;
+  }
+  const classNames = payload.classNames ?? payload.class_names ?? [];
+  const selected = payload.selectedClassNames ?? payload.selected_class_names ?? classNames;
+  const normalized = Array.isArray(classNames) ? classNames.map(String) : [];
+  const normalizedSelected = Array.isArray(selected) && selected.length > 0
+    ? selected.map(String)
+    : normalized;
+  return { classNames: normalized, selectedClassNames: normalizedSelected };
+}
+
 export const getModelInferenceTasks = (modelId, params) => {
   return commonApi('get', `${Api.Model}/${modelId}/inference_tasks`, {params});
+};
+
+// 模型发布接口
+export const publishModel = (modelId, params) => {
+  return commonApi('post', `${Api.Model}/${modelId}/publish`, {data: params});
 };
 
 // 模型OTA检测接口
@@ -72,7 +91,7 @@ export const uploadModelFile = (formData: FormData) => {
     url: `${Api.Model}/upload`,
     data: formData,
     headers: {
-      'Content-Type': 'multipart/form-data',
+      // 勿手动写 multipart/form-data（缺 boundary）；由 axios 根据 FormData 自动设置
       'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')
     }
   });
@@ -111,8 +130,38 @@ export const runInference = (modelId, formData) => {
   return defHttp.post({
     url: `${Api.InferenceTask}/${modelId}/inference/run`,
     data: formData,
+    // 再次兜底：确保 FormData 不被按 JSON 处理
+    transformRequest: [(data, headers) => {
+      if (typeof FormData !== 'undefined' && data instanceof FormData) {
+        if ((headers as any)?.delete) {
+          (headers as any).delete('Content-Type');
+          (headers as any).delete('content-type');
+        } else if (headers) {
+          delete (headers as Record<string, any>)['Content-Type'];
+          delete (headers as Record<string, any>)['content-type'];
+        }
+      }
+      return data;
+    }],
+    // 推理请求（尤其视频）可能需要较长时间，避免默认10秒超时
+    timeout: 10 * 60 * 1000,
     headers: {
-      'Content-Type': 'multipart/form-data',
+      'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')
+    }
+  }, {
+    isTransformResponse: false
+  });
+};
+
+export const stopRtspInference = (payload: {
+  device_id?: string;
+  record_id?: number;
+  stop_all?: boolean;
+}) => {
+  return defHttp.post({
+    url: `${Api.InferenceTask}/inference/rtsp/stop`,
+    data: payload,
+    headers: {
       'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')
     }
   }, {
@@ -125,8 +174,19 @@ export const runClusterInference = (modelId, formData) => {
   return defHttp.post({
     url: `/model/cluster/${modelId}/inference/run`,
     data: formData,
+    transformRequest: [(data, headers) => {
+      if (typeof FormData !== 'undefined' && data instanceof FormData) {
+        if ((headers as any)?.delete) {
+          (headers as any).delete('Content-Type');
+          (headers as any).delete('content-type');
+        } else if (headers) {
+          delete (headers as Record<string, any>)['Content-Type'];
+          delete (headers as Record<string, any>)['content-type'];
+        }
+      }
+      return data;
+    }],
     headers: {
-      'Content-Type': 'multipart/form-data',
       'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')
     }
   }, {
@@ -173,8 +233,9 @@ export const uploadInputFile = (formData: FormData) => {
   return defHttp.post({
     url: `${Api.InferenceTask}/upload_input`,
     data: formData,
+    // 上传较大视频文件时需要更长超时
+    timeout: 10 * 60 * 1000,
     headers: {
-      'Content-Type': 'multipart/form-data',
       'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token')
     }
   });
@@ -320,3 +381,92 @@ export const getExtractorLogs = (cameraName, params) => {
   return commonApi('get', `${Api.DeployService}/extractor/${cameraName}/logs`, {params});
 };
 
+// ================= 姿态分析接口 =================
+const poseFormPost = (url: string, formData: FormData) => {
+  return defHttp.post({
+    url,
+    data: formData,
+    transformRequest: [(data, headers) => {
+      if (typeof FormData !== 'undefined' && data instanceof FormData) {
+        if ((headers as any)?.delete) {
+          (headers as any).delete('Content-Type');
+          (headers as any).delete('content-type');
+        } else if (headers) {
+          delete (headers as Record<string, any>)['Content-Type'];
+          delete (headers as Record<string, any>)['content-type'];
+        }
+      }
+      return data;
+    }],
+    timeout: 10 * 60 * 1000,
+    headers: {
+      'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token'),
+    },
+  }, {
+    isTransformResponse: false,
+  });
+};
+
+/** 图片姿态估计（同步） */
+export const posePredict = (modelId: number, formData: FormData) => {
+  return poseFormPost(`/model/pose/${modelId}/predict`, formData);
+};
+
+/** 视频姿态估计（异步），返回 jobId */
+export const posePredictVideo = (modelId: number, formData: FormData) => {
+  return poseFormPost(`/model/pose/${modelId}/predict-video`, formData);
+};
+
+/** 查询姿态视频任务进度 */
+export const poseVideoProgress = (jobId: string) => {
+  return defHttp.get({
+    url: `/model/pose/progress/${jobId}`,
+    timeout: 10 * 60 * 1000,
+    headers: {
+      'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token'),
+    },
+  }, {
+    isTransformResponse: false,
+  });
+};
+
+/** 下载姿态输出视频 */
+export const poseOutputVideo = (filename: string) => {
+  return defHttp.get({
+    url: `/model/pose/output/${encodeURIComponent(filename)}`,
+    responseType: 'blob',
+    timeout: 10 * 60 * 1000,
+    headers: {
+      'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token'),
+    },
+  }, {
+    isTransformResponse: false,
+  });
+};
+
+/** 启动摄像头姿态 RTSP 推流 */
+export const poseRtspStart = (modelId: number, formData: FormData) => {
+  return poseFormPost(`/model/pose/${modelId}/rtsp/start`, formData);
+};
+
+/** 停止姿态 RTSP 推流 */
+export const poseRtspStop = (payload: {
+  device_id?: string;
+  record_id?: number;
+  stop_all?: boolean;
+}) => {
+  return defHttp.post({
+    url: '/model/pose/rtsp/stop',
+    data: payload,
+    headers: {
+      'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token'),
+    },
+  }, {
+    isTransformResponse: false,
+  });
+};
+
+/** 获取可用姿态模型列表 */
+export const getPoseModels = () => {
+  return commonApi('get', '/model/pose/models');
+};

@@ -56,7 +56,7 @@ const state = reactive({
 const modelRef = reactive({
   name: '',
   stream: 0,
-  username: '',
+  username: 'admin',
   password: '',
 });
 

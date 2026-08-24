@@ -1,22 +1,28 @@
 <template>
-  <div class="snap-task-container">
-    <!-- 工具栏 -->
+  <div class="snap-task-container" :class="{ 'snap-task-container--embedded': embedded }">
     <div class="toolbar">
-      <a-button type="primary" @click="handleCreate">
+      <Button type="primary" @click="handleCreate">
         <template #icon>
           <PlusOutlined />
         </template>
-        新建算法任务
-      </a-button>
-      <a-button @click="handleClickSwap" type="default">
+        新建抓拍任务
+      </Button>
+      <Button type="default" @click="handleClickSwap">
         <template #icon>
           <SwapOutlined />
         </template>
         切换视图
-      </a-button>
+      </Button>
+      <span v-if="activeSpaceFilterLabel" class="filter-hint">
+        已筛选空间：{{ activeSpaceFilterLabel }}
+        <a class="clear-filter" @click="clearSpaceFilter">清除</a>
+      </span>
+      <span v-if="activeDeviceFilterLabel" class="filter-hint">
+        已筛选设备：{{ activeDeviceFilterLabel }}
+        <a class="clear-filter" @click="clearDeviceFilter">清除</a>
+      </span>
     </div>
 
-    <!-- 表格模式 -->
     <BasicTable v-if="viewMode === 'table'" @register="registerTable">
       <template #bodyCell="{ column, record }">
         <template v-if="column.dataIndex === 'status'">
@@ -36,7 +42,6 @@
       </template>
     </BasicTable>
 
-    <!-- 卡片模式 -->
     <div v-else class="card-list">
       <a-row :gutter="[16, 16]">
         <a-col :xs="24" :sm="12" :md="8" :lg="6" v-for="item in taskList" :key="item.id">
@@ -53,6 +58,12 @@
               <a-dropdown>
                 <template #overlay>
                   <a-menu>
+                    <a-menu-item @click="handleViewLogs(item)">
+                      <FileTextOutlined /> 运行日志
+                    </a-menu-item>
+                    <a-menu-item @click="handleViewGallery(item)">
+                      <PictureOutlined /> 查看图库
+                    </a-menu-item>
                     <a-menu-item @click="handleView(item)">
                       <EyeOutlined /> 查看
                     </a-menu-item>
@@ -99,96 +110,142 @@
           </a-card>
         </a-col>
       </a-row>
-      <a-empty v-if="taskList.length === 0" description="暂无算法任务" />
+      <a-empty v-if="taskList.length === 0" description="暂无抓拍任务" />
     </div>
 
-    <!-- 创建/编辑模态框 -->
     <SnapTaskModal @register="registerModal" @success="handleSuccess" />
+    <SnapTaskLogsModal @register="registerLogsModal" />
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted } from 'vue';
-import { PlusOutlined, SwapOutlined, EyeOutlined, EditOutlined, DeleteOutlined, MoreOutlined } from '@ant-design/icons-vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import {
+  PlusOutlined,
+  SwapOutlined,
+  EyeOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  MoreOutlined,
+  PictureOutlined,
+  FileTextOutlined,
+} from '@ant-design/icons-vue';
 import { BasicTable, TableAction, useTable } from '@/components/Table';
 import { useDrawer } from '@/components/Drawer';
+import { useModal } from '@/components/Modal';
 import { useMessage } from '@/hooks/web/useMessage';
-import { getSnapTaskList, deleteSnapTask, startSnapTask, stopSnapTask, type SnapTask } from '@/api/device/snap';
+import {
+  getSnapSpaceList,
+  getSnapTaskList,
+  deleteSnapTask,
+  startSnapTask,
+  stopSnapTask,
+  type SnapTask,
+} from '@/api/device/snap';
+import { getDeviceList } from '@/api/device/camera';
 import SnapTaskModal from './SnapTaskModal.vue';
+import SnapTaskLogsModal from './SnapTaskLogsModal.vue';
+import { Button } from '@/components/Button';
 
 defineOptions({ name: 'SnapTask' });
 
+const props = defineProps<{
+  embedded?: boolean;
+  initialSpaceId?: number | null;
+  initialDeviceId?: string | null;
+}>();
+
+const router = useRouter();
 const { createMessage } = useMessage();
 const [registerModal, { openDrawer }] = useDrawer();
+const [registerLogsModal, { openModal: openLogsModal }] = useModal();
 
-// 视图模式
-const viewMode = ref<'table' | 'card'>('card');
+const viewMode = ref<'table' | 'card'>('table');
 const taskList = ref<SnapTask[]>([]);
+const spaceOptions = ref<Array<{ label: string; value: number }>>([]);
+const deviceOptions = ref<Array<{ label: string; value: string }>>([]);
+const spaceFilterId = ref<number | undefined>(undefined);
+const deviceFilterId = ref<string | undefined>(undefined);
 
-// 切换视图
-const handleClickSwap = () => {
-  viewMode.value = viewMode.value === 'table' ? 'card' : 'table';
-  if (viewMode.value === 'card') {
-    loadTaskList();
+const activeSpaceFilterLabel = computed(() => {
+  if (spaceFilterId.value == null) return '';
+  return spaceOptions.value.find((item) => item.value === spaceFilterId.value)?.label ?? `#${spaceFilterId.value}`;
+});
+
+const activeDeviceFilterLabel = computed(() => {
+  if (!deviceFilterId.value) return '';
+  return deviceOptions.value.find((item) => item.value === deviceFilterId.value)?.label ?? deviceFilterId.value;
+});
+
+async function loadSpaceOptions() {
+  try {
+    const response = await getSnapSpaceList({ pageNo: 1, pageSize: 1000, scope: 'leaves' });
+    const items = response.data || [];
+    spaceOptions.value = items
+      .filter((item) => item.id != null)
+      .map((item) => ({
+        label: item.space_name,
+        value: item.id!,
+      }));
+  } catch (error) {
+    console.error('加载抓拍空间列表失败', error);
   }
-};
+}
 
-// 表格列定义
+async function loadDeviceOptions() {
+  try {
+    const response = await getDeviceList({ pageNo: 1, pageSize: 1000 });
+    const items = response.data || [];
+    deviceOptions.value = items.map((item) => ({
+      label: item.name ? `${item.name} (${item.id})` : item.id,
+      value: item.id,
+    }));
+  } catch (error) {
+    console.error('加载设备列表失败', error);
+  }
+}
+
+function applySpaceFilter(spaceId?: number | null) {
+  spaceFilterId.value = spaceId ?? undefined;
+  getForm?.()?.setFieldsValue?.({ space_id: spaceFilterId.value });
+  refresh();
+}
+
+function applyDeviceFilter(deviceId?: string | null) {
+  deviceFilterId.value = deviceId ?? undefined;
+  getForm?.()?.setFieldsValue?.({ device_id: deviceFilterId.value });
+  refresh();
+}
+
+function clearSpaceFilter() {
+  applySpaceFilter(undefined);
+}
+
+function clearDeviceFilter() {
+  applyDeviceFilter(undefined);
+}
+
 const getBasicColumns = () => [
-  {
-    title: '任务名称',
-    dataIndex: 'task_name',
-    width: 150,
-  },
-  {
-    title: '空间名称',
-    dataIndex: 'space_name',
-    width: 120,
-  },
-  {
-    title: '设备名称',
-    dataIndex: 'device_name',
-    width: 120,
-  },
-  {
-    title: '抓拍类型',
-    dataIndex: 'capture_type',
-    width: 80,
-  },
-  {
-    title: 'Cron表达式',
-    dataIndex: 'cron_expression',
-    width: 150,
-  },
-  {
-    title: '状态',
-    dataIndex: 'status',
-    width: 80,
-  },
-  {
-    title: '启用',
-    dataIndex: 'is_enabled',
-    width: 80,
-  },
-  {
-    title: '抓拍次数',
-    dataIndex: 'total_captures',
-    width: 100,
-  },
-  {
-    title: '操作',
-    dataIndex: 'action',
-    width: 150,
-    fixed: 'right',
-  },
+  { title: '任务名称', dataIndex: 'task_name', width: 150 },
+  { title: '空间名称', dataIndex: 'space_name', width: 120 },
+  { title: '设备名称', dataIndex: 'device_name', width: 120 },
+  { title: '抓拍类型', dataIndex: 'capture_type', width: 80 },
+  { title: 'Cron表达式', dataIndex: 'cron_expression', width: 150 },
+  { title: '状态', dataIndex: 'status', width: 80 },
+  { title: '启用', dataIndex: 'is_enabled', width: 80 },
+  { title: '抓拍次数', dataIndex: 'total_captures', width: 100 },
+  { title: '操作', dataIndex: 'action', width: 220, fixed: 'right' as const },
 ];
 
-// 表格配置
-const [registerTable, { reload }] = useTable({
-  title: '算法任务列表',
+const [registerTable, { reload, getForm }] = useTable({
+  title: '抓拍任务列表',
   api: async (params) => {
-    const response = await getSnapTaskList(params);
-    // 后端返回格式: { code: 0, data: [...], total: ... }
+    const response = await getSnapTaskList({
+      ...params,
+      space_id: params.space_id ?? spaceFilterId.value,
+      device_id: params.device_id ?? deviceFilterId.value,
+    });
     return {
       items: response.data || [],
       total: response.total || 0,
@@ -203,17 +260,30 @@ const [registerTable, { reload }] = useTable({
         field: 'search',
         label: '任务名称',
         component: 'Input',
-        componentProps: {
-          placeholder: '请输入任务名称',
-        },
+        componentProps: { placeholder: '请输入任务名称' },
       },
       {
         field: 'space_id',
-        label: '空间',
+        label: '抓拍空间',
         component: 'Select',
         componentProps: {
-          placeholder: '请选择空间',
-          options: [], // 需要从API获取
+          placeholder: '请选择抓拍空间',
+          allowClear: true,
+          showSearch: true,
+          optionFilterProp: 'label',
+          options: spaceOptions,
+        },
+      },
+      {
+        field: 'device_id',
+        label: '设备',
+        component: 'Select',
+        componentProps: {
+          placeholder: '请选择设备',
+          allowClear: true,
+          showSearch: true,
+          optionFilterProp: 'label',
+          options: deviceOptions,
         },
       },
       {
@@ -222,6 +292,7 @@ const [registerTable, { reload }] = useTable({
         component: 'Select',
         componentProps: {
           placeholder: '请选择状态',
+          allowClear: true,
           options: [
             { label: '正常', value: 0 },
             { label: '异常', value: 1 },
@@ -238,9 +309,37 @@ const [registerTable, { reload }] = useTable({
   },
 });
 
-// 获取表格操作按钮
-const getTableActions = (record: SnapTask) => {
+function handleViewGallery(record: SnapTask) {
+  if (!record.space_id) {
+    createMessage.warning('该任务未关联抓拍空间');
+    return;
+  }
+  router.push({
+    path: `/snap-space-manage/${record.space_id}`,
+    query: { view: 'images' },
+  });
+}
+
+function handleViewLogs(record: SnapTask) {
+  openLogsModal(true, {
+    taskId: record.id,
+    taskName: record.task_name,
+    autoRefresh: !!record.is_enabled,
+  });
+}
+
+function getTableActions(record: SnapTask) {
   return [
+    {
+      icon: 'ant-design:picture-outlined',
+      tooltip: '查看图库',
+      onClick: () => handleViewGallery(record),
+    },
+    {
+      icon: 'ant-design:file-text-outlined',
+      tooltip: '运行日志',
+      onClick: () => handleViewLogs(record),
+    },
     {
       icon: 'ant-design:eye-filled',
       tooltip: '查看',
@@ -260,47 +359,59 @@ const getTableActions = (record: SnapTask) => {
       icon: 'material-symbols:delete-outline-rounded',
       tooltip: '删除',
       popConfirm: {
-        title: '确定删除此算法任务？',
+        title: '确定删除此抓拍任务？',
         confirm: () => handleDelete(record),
       },
     },
   ];
-};
+}
 
-// 加载任务列表（卡片模式）
-const loadTaskList = async () => {
+async function loadTaskList() {
   try {
-    const response = await getSnapTaskList({ pageNo: 1, pageSize: 1000 });
-    // 后端返回格式: { code: 0, data: [...], total: ... }
+    const response = await getSnapTaskList({
+      pageNo: 1,
+      pageSize: 1000,
+      space_id: spaceFilterId.value,
+      device_id: deviceFilterId.value,
+    });
     if (response.code === 0) {
       taskList.value = response.data || [];
     } else {
-      createMessage.error(response.msg || '加载算法任务列表失败');
+      createMessage.error(response.msg || '加载抓拍任务列表失败');
       taskList.value = [];
     }
   } catch (error) {
-    console.error('加载算法任务列表失败', error);
-    createMessage.error('加载算法任务列表失败');
+    console.error('加载抓拍任务列表失败', error);
+    createMessage.error('加载抓拍任务列表失败');
     taskList.value = [];
+  }
+}
+
+const handleClickSwap = () => {
+  viewMode.value = viewMode.value === 'table' ? 'card' : 'table';
+  if (viewMode.value === 'card') {
+    void loadTaskList();
+  } else {
+    reload();
   }
 };
 
-// 创建
 const handleCreate = () => {
-  openDrawer(true, { type: 'create' });
+  openDrawer(true, {
+    type: 'create',
+    space_id: spaceFilterId.value,
+    device_id: deviceFilterId.value,
+  });
 };
 
-// 查看
 const handleView = (record: SnapTask) => {
   openDrawer(true, { type: 'view', record });
 };
 
-// 编辑
 const handleEdit = (record: SnapTask) => {
   openDrawer(true, { type: 'edit', record });
 };
 
-// 删除
 const handleDelete = async (record: SnapTask) => {
   try {
     const response = await deleteSnapTask(record.id);
@@ -316,26 +427,16 @@ const handleDelete = async (record: SnapTask) => {
   }
 };
 
-// 切换启用状态
 const handleToggleEnabled = async (record: SnapTask) => {
   try {
-    let response;
-    if (record.is_enabled) {
-      response = await stopSnapTask(record.id);
-      if (response.code === 0) {
-        createMessage.success('任务已停用');
-        handleSuccess();
-      } else {
-        createMessage.error(response.msg || '停用失败');
-      }
+    const response = record.is_enabled
+      ? await stopSnapTask(record.id)
+      : await startSnapTask(record.id);
+    if (response.code === 0) {
+      createMessage.success(record.is_enabled ? '任务已停用' : '任务已启用');
+      handleSuccess();
     } else {
-      response = await startSnapTask(record.id);
-      if (response.code === 0) {
-        createMessage.success('任务已启用');
-        handleSuccess();
-      } else {
-        createMessage.error(response.msg || '启用失败');
-      }
+      createMessage.error(response.msg || '操作失败');
     }
   } catch (error) {
     console.error('操作失败', error);
@@ -343,20 +444,56 @@ const handleToggleEnabled = async (record: SnapTask) => {
   }
 };
 
-// 刷新
-const handleSuccess = () => {
+function handleSuccess() {
   if (viewMode.value === 'table') {
     reload();
   } else {
-    loadTaskList();
+    void loadTaskList();
   }
-};
+}
+
+function refresh() {
+  if (viewMode.value === 'table') {
+    reload();
+  } else {
+    void loadTaskList();
+  }
+}
+
+async function initFilters() {
+  await Promise.all([loadSpaceOptions(), loadDeviceOptions()]);
+  if (props.initialSpaceId != null) {
+    spaceFilterId.value = props.initialSpaceId;
+  }
+  if (props.initialDeviceId) {
+    deviceFilterId.value = props.initialDeviceId;
+  }
+  await getForm?.()?.setFieldsValue?.({
+    space_id: spaceFilterId.value,
+    device_id: deviceFilterId.value,
+  });
+  refresh();
+}
+
+watch(
+  () => props.initialSpaceId,
+  (spaceId) => {
+    applySpaceFilter(spaceId);
+  },
+);
+
+watch(
+  () => props.initialDeviceId,
+  (deviceId) => {
+    applyDeviceFilter(deviceId);
+  },
+);
 
 onMounted(() => {
-  if (viewMode.value === 'card') {
-    loadTaskList();
-  }
+  void initFilters();
 });
+
+defineExpose({ refresh });
 </script>
 
 <style lang="less" scoped>
@@ -365,14 +502,56 @@ onMounted(() => {
   background: #f0f2f5;
   min-height: calc(100vh - 200px);
 
+  &--embedded {
+    padding: 0;
+    background: transparent;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+
+    .toolbar {
+      flex-shrink: 0;
+      margin: 0 0 12px;
+      box-shadow: none;
+      border: 1px solid #f0f0f0;
+    }
+
+    :deep(.vben-basic-table) {
+      flex: 1;
+      min-height: 0;
+    }
+
+    .card-list {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      box-shadow: none;
+      border: 1px solid #f0f0f0;
+    }
+  }
+
   .toolbar {
     margin-bottom: 16px;
     display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     background: #fff;
     padding: 16px;
     border-radius: 8px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .filter-hint {
+    margin-left: auto;
+    font-size: 13px;
+    color: #8c8c8c;
+
+    .clear-filter {
+      margin-left: 8px;
+    }
   }
 
   .card-list {
@@ -423,4 +602,3 @@ onMounted(() => {
   }
 }
 </style>
-

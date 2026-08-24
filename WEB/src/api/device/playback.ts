@@ -1,13 +1,10 @@
 import {defHttp} from '@/utils/http/axios';
-import { getAccessToken } from '@/utils/auth';
 
 const PLAYBACK_PREFIX = '/video/playback';
 
-// 通用请求封装（与全局会话一致，便于网关 / VIDEO 侧校验 Redis 令牌）
+// 通用请求封装
 const commonApi = (method: 'get' | 'post' | 'delete' | 'put', url: string, params = {}, headers = {}, isTransformResponse = true) => {
-  const t = getAccessToken();
-  if (t)
-    defHttp.setHeader({ 'X-Authorization': `Bearer ${t}` });
+  defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
 
   return defHttp[method]({
     url,
@@ -107,6 +104,7 @@ export const getPlaybackStatistics = (params?: {
 export interface PlaybackInfo {
   id: number;
   file_path: string;
+  video_url?: string;
   event_time: string;
   device_id: string;
   device_name: string;

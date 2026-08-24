@@ -3,7 +3,7 @@
     v-bind="$attrs"
     @register="register"
     :title="drawerTitle"
-    width="1200"
+    width="1500"
     :maskClosable="true"
     @close="handleClose"
   >
@@ -144,9 +144,10 @@ import {
   ReloadOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons-vue';
-import {Tag, Button, Empty, Spin} from 'ant-design-vue';
+import { Tag, Empty, Spin } from 'ant-design-vue';
 import {Icon} from '@/components/Icon';
 import {useMessage} from '@/hooks/web/useMessage';
+import {rewriteStreamHostToPageHost} from '@/views/camera/utils/devicePlay';
 import {
   type StreamForwardTask,
   getStreamForwardTask,
@@ -159,7 +160,7 @@ import {
 import StreamForwardLogsModal from './StreamForwardLogsModal.vue';
 import {useModal} from '@/components/Modal';
 import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue';
-
+import { Button } from '@/components/Button'
 // 摄像头推流信息类型
 interface CameraStreamInfo {
   device_id: string;
@@ -204,10 +205,21 @@ const serviceList = computed(() => {
         : 'stopped';
     }
     
-    // 为每个摄像头创建一条记录
+    // 为每个摄像头创建一条记录（设备级远程部署时展示各分片节点信息）
+    const deployments = serviceStatusInfo.value?.device_deployments
+      || taskInfo.value.device_deployments
+      || [];
+    const deploymentByDevice = new Map<string, any>();
+    deployments.forEach((dep: any) => {
+      (dep.device_ids || []).forEach((deviceId: string) => {
+        deploymentByDevice.set(deviceId, dep);
+      });
+    });
+
     deviceIds.forEach((deviceId: string, index: number) => {
       const deviceName = deviceNames[index] || deviceId;
       const cameraStream = cameraStreamsList.value.find(s => s.device_id === deviceId);
+      const dep = deploymentByDevice.get(deviceId);
       
       const serviceItem = {
         id: `stream_forward_${taskInfo.value!.id}_${deviceId}`,
@@ -216,11 +228,13 @@ const serviceList = computed(() => {
         device_id: deviceId,
         device_name: deviceName,
         status: status,
-        server_ip: serviceStatusInfo.value?.server_ip,
+        server_ip: dep?.host || serviceStatusInfo.value?.server_ip,
         port: serviceStatusInfo.value?.port,
-        process_id: serviceStatusInfo.value?.process_id,
+        process_id: dep?.pid || serviceStatusInfo.value?.process_id,
+        node_id: dep?.node_id,
+        workload_id: dep?.workload_id,
         last_heartbeat: serviceStatusInfo.value?.last_heartbeat,
-        log_path: serviceStatusInfo.value?.log_path,
+        log_path: dep?.log_dir || serviceStatusInfo.value?.log_path,
         total_streams: serviceStatusInfo.value?.total_streams || deviceIds.length,
         rtmp_stream: cameraStream?.rtmp_stream,
         http_stream: cameraStream?.http_stream,
@@ -239,7 +253,8 @@ const getColumns = () => [
   {
     title: '服务名称',
     dataIndex: 'service_name',
-    width: 150,
+    width: 280,
+    ellipsis: false,
     fixed: 'left',
   },
   {
@@ -250,7 +265,8 @@ const getColumns = () => [
   {
     title: '服务器IP',
     dataIndex: 'server_ip',
-    width: 140,
+    width: 180,
+    ellipsis: false,
     customRender: ({text}: { text: string }) => text || '--',
   },
   {
@@ -655,7 +671,10 @@ const playCameraStream = (stream: CameraStreamInfo) => {
     createMessage.warning(`摄像头 ${stream.device_name} 暂无推流地址`);
     return;
   }
-  
+
+  // 流地址统一走当前页面 host:port，便于不同环境下浏览器直接拉流
+  httpStream = rewriteStreamHostToPageHost(httpStream);
+
   // 打开播放器
   openPlayerModal(true, {
     id: stream.device_id,
@@ -720,6 +739,8 @@ const [register] = useDrawerInner(async (data) => {
       font-weight: 500;
       color: #262626;
       font-size: 14px;
+      word-break: break-all;
+      white-space: normal;
     }
   }
 

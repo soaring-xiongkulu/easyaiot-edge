@@ -46,21 +46,21 @@
       </div>
       <div class="logs-footer">
         <div class="logs-footer-left">
-          <a-button type="primary" @click="handleRefresh" :loading="loading">
+          <Button type="primary" @click="handleRefresh" :loading="loading">
             <template #icon><ReloadOutlined /></template>
             刷新
-          </a-button>
-          <a-button @click="handleClear">
+          </Button>
+          <Button @click="handleClear">
             <template #icon><ClearOutlined /></template>
             清空显示
-          </a-button>
-          <a-button @click="handleScrollToBottom">
+          </Button>
+          <Button @click="handleScrollToBottom">
             <template #icon><VerticalAlignBottomOutlined /></template>
             滚动到底部
-          </a-button>
+          </Button>
         </div>
         <div class="logs-footer-right">
-          <a-button @click="handleClose">关闭</a-button>
+          <Button @click="handleClose">关闭</Button>
         </div>
       </div>
     </div>
@@ -73,8 +73,7 @@ import {BasicModal, useModalInner} from '@/components/Modal';
 import {useMessage} from '@/hooks/web/useMessage';
 import {
   Empty as AEmpty, 
-  Spin as ASpin, 
-  Button as AButton,
+  Spin as ASpin,
   Switch as ASwitch,
   Select as ASelect,
   SelectOption as ASelectOption,
@@ -86,9 +85,9 @@ import {
   VerticalAlignBottomOutlined,
   FileTextOutlined
 } from '@ant-design/icons-vue';
+import { Button } from '@/components/Button'
 import {
-  getStreamForwardTaskLogs,
-} from '@/api/device/stream_forward';
+getStreamForwardTaskLogs} from '@/api/device/stream_forward';
 
 defineOptions({ name: 'StreamForwardLogsModal' });
 
@@ -115,8 +114,7 @@ const [register, {closeModal}] = useModalInner(async (data) => {
   if (data) {
     logs.value = data.logs || '';
     logParams.value = {
-      taskId: data.taskId,
-    };
+      taskId: data.taskId};
     
     // 重置滚动状态，确保打开时滚动到底部
     isScrolling.value = false;

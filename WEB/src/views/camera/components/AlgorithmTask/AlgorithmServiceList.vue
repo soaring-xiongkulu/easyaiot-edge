@@ -9,11 +9,11 @@
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">
-          <a-space>
+          <Space>
             <a-popconfirm title="确定要删除吗？" @confirm="handleDelete(record.id)">
-              <a-button type="link" size="small" danger>删除</a-button>
+              <Button type="link" size="small" danger>删除</Button>
             </a-popconfirm>
-          </a-space>
+          </Space>
         </template>
         <template v-else-if="column.key === 'is_enabled'">
           <a-switch :checked="record.is_enabled" size="small" @change="handleToggleEnabled(record)" />
@@ -28,8 +28,10 @@
 <script lang="ts" setup>
 import { ref, onMounted } from 'vue';
 import { useMessage } from '@/hooks/web/useMessage';
+import { Button } from '@/components/Button'
+import { Space } from 'ant-design-vue'
 import {
-  listTaskServices,
+listTaskServices,
   deleteTaskService,
   updateTaskService,
   type AlgorithmModelService,
@@ -102,7 +104,6 @@ const handleToggleEnabled = async (record: AlgorithmModelService) => {
     createMessage.error('更新失败');
   }
 };
-
 
 onMounted(() => {
   loadServices();

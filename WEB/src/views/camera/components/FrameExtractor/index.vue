@@ -2,18 +2,18 @@
   <div class="frame-extractor-container">
     <!-- 工具栏 -->
     <div class="toolbar">
-      <a-button type="primary" @click="handleCreate">
+      <Button type="primary" @click="handleCreate">
         <template #icon>
           <PlusOutlined />
         </template>
         新建抽帧器
-      </a-button>
-      <a-button @click="handleClickSwap" type="default">
+      </Button>
+      <Button @click="handleClickSwap" type="default">
         <template #icon>
           <SwapOutlined />
         </template>
         切换视图
-      </a-button>
+      </Button>
     </div>
 
     <!-- 表格模式 -->
@@ -113,7 +113,7 @@ import {
   type FrameExtractor,
 } from '@/api/device/algorithm_task';
 import FrameExtractorModal from './FrameExtractorModal.vue';
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'FrameExtractor' });
 
 const { createMessage } = useMessage();

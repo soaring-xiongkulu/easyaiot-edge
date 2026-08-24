@@ -46,21 +46,21 @@
       </div>
       <div class="logs-footer">
         <div class="logs-footer-left">
-          <a-button type="primary" @click="handleRefresh" :loading="loading">
+          <Button type="primary" @click="handleRefresh" :loading="loading">
             <template #icon><ReloadOutlined /></template>
             刷新
-          </a-button>
-          <a-button @click="handleClear">
+          </Button>
+          <Button @click="handleClear">
             <template #icon><ClearOutlined /></template>
             清空显示
-          </a-button>
-          <a-button @click="handleScrollToBottom">
+          </Button>
+          <Button @click="handleScrollToBottom">
             <template #icon><VerticalAlignBottomOutlined /></template>
             滚动到底部
-          </a-button>
+          </Button>
         </div>
         <div class="logs-footer-right">
-          <a-button @click="handleClose">关闭</a-button>
+          <Button @click="handleClose">关闭</Button>
         </div>
       </div>
     </div>
@@ -73,8 +73,7 @@ import {BasicModal, useModalInner} from '@/components/Modal';
 import {useMessage} from '@/hooks/web/useMessage';
 import {
   Empty as AEmpty, 
-  Spin as ASpin, 
-  Button as AButton,
+  Spin as ASpin,
   Switch as ASwitch,
   Select as ASelect,
   SelectOption as ASelectOption,
@@ -86,12 +85,12 @@ import {
   VerticalAlignBottomOutlined,
   FileTextOutlined
 } from '@ant-design/icons-vue';
+import { Button } from '@/components/Button'
 import {
-  getTaskExtractorLogs,
+getTaskExtractorLogs,
   getTaskSorterLogs,
   getTaskPusherLogs,
-  getTaskRealtimeLogs,
-} from '@/api/device/algorithm_task';
+  getTaskRealtimeLogs} from '@/api/device/algorithm_task';
 
 defineOptions({ name: 'ServiceLogsModal' });
 
@@ -120,8 +119,7 @@ const [register, {closeModal}] = useModalInner(async (data) => {
     logs.value = data.logs || '';
     logParams.value = {
       taskId: data.taskId,
-      serviceType: data.serviceType,
-    };
+      serviceType: data.serviceType};
     
     // 重置滚动状态，确保打开时滚动到底部
     isScrolling.value = false;
@@ -168,18 +166,29 @@ const loadLogs = async (taskId: number, serviceType: string) => {
     // 响应转换器会将 data.data 直接返回，所以 logsResponse 就是 data.data 的内容
     // 如果 logsResponse 有 code 字段，说明是完整响应对象；否则就是转换后的 data.data
     if (logsResponse && typeof logsResponse === 'object') {
+      let taskEnabled: boolean | undefined;
       if ('code' in logsResponse) {
         // 完整响应对象
         if (logsResponse.code === 0 && logsResponse.data) {
           logs.value = logsResponse.data.logs || '';
+          taskEnabled = (logsResponse.data as any).task_enabled;
         } else {
           logs.value = `获取日志失败: ${logsResponse.msg || '未知错误'}`;
         }
       } else if ('logs' in logsResponse) {
         // 转换后的 data.data 对象，直接包含 logs 字段
         logs.value = logsResponse.logs || '';
+        taskEnabled = (logsResponse as any).task_enabled;
       } else {
         logs.value = '获取日志失败: 响应数据格式错误';
+      }
+
+      // 任务已关闭(is_enabled=false)时自动停止自动刷新：
+      // 避免算法任务关闭后弹窗仍每隔数秒轮询日志接口、反复弹出"取日志失败"。
+      if (autoRefresh.value && taskEnabled === false) {
+        stopAutoRefresh();
+        autoRefresh.value = false;
+        createMessage.info('算法任务已关闭，已自动停止日志刷新');
       }
       
       // 只有在用户没有手动滚动时才自动滚动到底部
@@ -195,8 +204,15 @@ const loadLogs = async (taskId: number, serviceType: string) => {
     }
   } catch (error) {
     console.error('获取日志失败', error);
-    createMessage.error('获取日志失败');
-    logs.value = '';
+    // 任务停止或服务重启会使接口短暂不可用：自动刷新场景下停止轮询，
+    // 避免每隔数秒反复弹错；仅手动刷新时提示一次失败。
+    if (autoRefresh.value) {
+      stopAutoRefresh();
+      autoRefresh.value = false;
+      createMessage.warning('获取日志失败，已暂停自动刷新');
+    } else {
+      createMessage.error('获取日志失败');
+    }
   } finally {
     loading.value = false;
   }

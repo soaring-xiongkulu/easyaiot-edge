@@ -11,21 +11,31 @@
     <div class="record-video-container">
       <!-- 顶部操作栏 -->
       <div class="record-video-header">
+        <div class="header-search">
+          <Input
+            v-model:value="searchKeyword"
+            placeholder="搜索文件名"
+            allow-clear
+            style="width: 220px"
+            @pressEnter="handleSearch"
+          />
+        </div>
         <div class="header-actions">
-          <a-button type="primary" @click="handleSelectAll">
+          <Button @click="handleSearch">搜索</Button>
+          <Button type="primary" @click="handleSelectAll">
             {{ isAllSelected ? '取消全选' : '全选' }}
-          </a-button>
-          <a-button type="primary" @click="handleRefresh">
+          </Button>
+          <Button type="primary" @click="handleRefresh">
             刷新
-          </a-button>
-          <a-button 
+          </Button>
+          <Button 
             type="primary" 
             danger 
             :disabled="selectedRowKeys.length === 0"
             @click="handleBatchDelete"
           >
             批量删除 ({{ selectedRowKeys.length }})
-          </a-button>
+          </Button>
         </div>
       </div>
 
@@ -56,7 +66,7 @@
                   <div class="img-box">
                     <img
                       v-if="item.thumbnail_url"
-                      :src="item.thumbnail_url"
+                      :src="resolveAlertImageDisplayUrl(item.thumbnail_url)"
                       :alt="item.filename"
                       class="card-image"
                     />
@@ -92,15 +102,15 @@
                     
                     <!-- 操作按钮 -->
                     <div class="card-actions" @click.stop>
-                      <a-button type="link" size="small" @click="handlePlay(item)">
+                      <Button type="link" size="small" @click="handlePlay(item)">
                         播放
-                      </a-button>
-                      <a-button type="link" size="small" @click="handlePreview(item)">
+                      </Button>
+                      <Button type="link" size="small" @click="handlePreview(item)">
                         预览
-                      </a-button>
-                      <a-button type="link" size="small" danger @click="handleDelete(item)">
+                      </Button>
+                      <Button type="link" size="small" danger @click="handleDelete(item)">
                         删除
-                      </a-button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -118,12 +128,14 @@
 
 <script lang="ts" setup>
 import { ref, computed } from 'vue';
-import { List, Spin } from 'ant-design-vue';
+import { List, Spin, Input } from 'ant-design-vue';
 import { BasicModal, useModalInner, useModal } from '@/components/Modal';
 import { useMessage } from '@/hooks/web/useMessage';
 import { getRecordVideoList, deleteRecordVideos, type RecordVideo } from '@/api/device/record';
 import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue';
-
+import { resolveAlertImageDisplayUrl } from '@/utils/alertMinioImage';
+import { resolveAlertVideoUrl } from '@/utils/alertRecord';
+import { Button } from '@/components/Button'
 defineOptions({ name: 'RecordVideoModal' });
 
 const { createMessage } = useMessage();
@@ -134,6 +146,7 @@ const ListItem = List.Item;
 const modalData = ref<{ space_id?: number; space_name?: string }>({});
 const videoList = ref<RecordVideo[]>([]);
 const loading = ref(false);
+const searchKeyword = ref('');
 const selectedRowKeys = ref<string[]>([]);
 const previewVisible = ref(false);
 const previewVideo = ref<RecordVideo | null>(null);
@@ -177,16 +190,7 @@ function pageSizeChange(_current: number, size: number) {
 const getVideoUrl = (record: RecordVideo) => {
   // 优先使用后台返回的 url 字段，如果没有则使用 object_name 构建
   if (record.url) {
-    // 如果是完整URL（以http://或https://开头），直接返回
-    if (record.url.startsWith('http://') || record.url.startsWith('https://')) {
-      return record.url;
-    }
-    // 如果是相对路径（以/api/v1/buckets开头），添加前端启动地址前缀
-    if (record.url.startsWith('/api/v1/buckets')) {
-      return `${window.location.origin}${record.url}`;
-    }
-    // 其他情况直接返回
-    return record.url;
+    return resolveAlertVideoUrl(record.url);
   }
   if (!modalData.value.space_id) return '';
   return `/video/record/space/${modalData.value.space_id}/video/${record.object_name}`;
@@ -235,37 +239,14 @@ const loadVideoList = async () => {
     const response = await getRecordVideoList(modalData.value.space_id, {
       pageNo: page.value,
       pageSize: pageSize.value,
+      search: searchKeyword.value.trim() || undefined,
     });
     
-    // 响应拦截器处理后的数据结构：{ code, data, msg, total }
-    // 或者直接是数组（如果响应拦截器返回了 data.data）
-    if (Array.isArray(response)) {
-      // 如果直接返回数组
-      videoList.value = response;
-      total.value = response.length;
-    } else if (response && typeof response === 'object') {
-      // 如果返回对象
-      if (response.code === 0) {
-        // 成功响应
-        if (Array.isArray(response.data)) {
-          // data是数组
-          videoList.value = response.data;
-          total.value = response.total || response.data.length;
-        } else if (response.data && Array.isArray(response.data.items)) {
-          // data.items是数组（某些接口可能这样返回）
-          videoList.value = response.data.items;
-          total.value = response.total || response.data.total || response.data.items.length;
-        } else {
-          videoList.value = [];
-          total.value = 0;
-        }
-      } else {
-        // 错误响应
-        createMessage.error(response.msg || '加载录像列表失败');
-        videoList.value = [];
-        total.value = 0;
-      }
+    if (response?.code === 0 && Array.isArray(response.data)) {
+      videoList.value = response.data;
+      total.value = response.total ?? 0;
     } else {
+      createMessage.error(response?.msg || '加载录像列表失败');
       videoList.value = [];
       total.value = 0;
     }
@@ -279,9 +260,14 @@ const loadVideoList = async () => {
   }
 };
 
+const handleSearch = () => {
+  page.value = 1;
+  selectedRowKeys.value = [];
+  loadVideoList();
+};
+
 const handleRefresh = () => {
   selectedRowKeys.value = [];
-  page.value = 1;
   loadVideoList();
 };
 
@@ -347,6 +333,9 @@ const handleDelete = async (record: RecordVideo) => {
   try {
     await deleteRecordVideos(modalData.value.space_id, [record.object_name]);
     createMessage.success('删除成功');
+    if (videoList.value.length === 1 && page.value > 1) {
+      page.value -= 1;
+    }
     loadVideoList();
   } catch (error: any) {
     console.error('删除失败', error);
@@ -359,8 +348,12 @@ const handleBatchDelete = async () => {
   if (!modalData.value.space_id || selectedRowKeys.value.length === 0) return;
   
   try {
+    const deleteCount = selectedRowKeys.value.length;
     await deleteRecordVideos(modalData.value.space_id, selectedRowKeys.value);
-    createMessage.success(`成功删除 ${selectedRowKeys.value.length} 个录像`);
+    createMessage.success(`成功删除 ${deleteCount} 个录像`);
+    if (videoList.value.length <= deleteCount && page.value > 1) {
+      page.value -= 1;
+    }
     selectedRowKeys.value = [];
     loadVideoList();
   } catch (error: any) {
@@ -392,7 +385,7 @@ const [register, { setModalProps, closeModal }] = useModalInner(async (data) => 
   .record-video-header {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     padding: 16px 0;
     margin-bottom: 16px;
     border-bottom: 1px solid #e8e8e8;

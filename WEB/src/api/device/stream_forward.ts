@@ -2,6 +2,9 @@ import { defHttp } from '@/utils/http/axios';
 
 const STREAM_FORWARD_PREFIX = '/video/stream-forward';
 
+// 远程节点部署（停止/启动/重启）可能等待 SRS 就绪与多分片下发，耗时远超默认 10s
+const LONG_RUNNING_TIMEOUT = 120000;
+
 // 通用请求封装
 const commonApi = <T = any>(
   method: 'get' | 'post' | 'delete' | 'put',
@@ -9,14 +12,16 @@ const commonApi = <T = any>(
   data?: any,
   headers = {},
   isTransformResponse = true,
-  errorMessageMode?: 'none' | 'message' | 'modal' // 如果未指定，使用默认值（message）
+  errorMessageMode?: 'none' | 'message' | 'modal', // 如果未指定，使用默认值（message）
+  timeout?: number,
 ) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
 
   return defHttp[method]<T>({
     url,
     headers: { ...headers },
-    ...(method === 'get' ? { params: data } : { data })
+    ...(timeout ? { timeout } : {}),
+    ...(method === 'get' ? { params: data } : { data }),
   }, { isTransformResponse, errorMessageMode });
 };
 
@@ -39,6 +44,21 @@ export interface StreamForwardTask {
   service_process_id?: number;
   service_last_heartbeat?: string;
   service_log_path?: string;
+  schedule_policy?: 'local' | 'auto' | 'node';
+  prefer_gpu?: boolean;
+  target_node_id?: number | null;
+  node_id?: number | null;
+  /** cpp=RUNTIME forward 高性能（默认）；python=FFmpeg */
+  executor?: 'cpp' | 'python';
+  runtime_bin_path?: string | null;
+  device_deployments?: Array<{
+    device_ids: string[];
+    node_id: number;
+    host?: string;
+    workload_id?: string;
+    pid?: number;
+    log_dir?: string;
+  }>;
   total_streams: number;
   last_process_time?: string;
   last_success_time?: string;
@@ -65,7 +85,7 @@ export const listStreamForwardTasks = (params?: {
   device_id?: string;
   is_enabled?: boolean;
 }) => {
-  return commonApi<StreamForwardTaskListResponse>('get', `${STREAM_FORWARD_PREFIX}/task/list`, { params });
+  return commonApi<StreamForwardTaskListResponse>('get', `${STREAM_FORWARD_PREFIX}/task/list`, params);
 };
 
 /**
@@ -89,6 +109,10 @@ export const createStreamForwardTask = (data: {
   output_bitrate?: string;
   description?: string;
   is_enabled?: boolean;
+  schedule_policy?: 'local' | 'auto' | 'node';
+  prefer_gpu?: boolean;
+  target_node_id?: number | null;
+  executor?: 'cpp' | 'python';
 }) => {
   return commonApi<{ code: number; msg: string; data: StreamForwardTask }>(
     'post',
@@ -104,7 +128,7 @@ export const createStreamForwardTask = (data: {
  * 更新推流转发任务
  */
 export const updateStreamForwardTask = (task_id: number, data: Partial<StreamForwardTask>) => {
-  return commonApi<{ code: number; msg: string; data: StreamForwardTask }>(
+  return commonApi<{ code: number; msg: string; data: StreamForwardTask; sync_action?: 'rebalance' | 'full_restart' | null }>(
     'put',
     `${STREAM_FORWARD_PREFIX}/task/${task_id}`,
     data,
@@ -127,7 +151,12 @@ export const deleteStreamForwardTask = (task_id: number) => {
 export const startStreamForwardTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: StreamForwardTask }>(
     'post',
-    `${STREAM_FORWARD_PREFIX}/task/${task_id}/start`
+    `${STREAM_FORWARD_PREFIX}/task/${task_id}/start`,
+    undefined,
+    {},
+    true,
+    'none',
+    LONG_RUNNING_TIMEOUT,
   );
 };
 
@@ -137,7 +166,12 @@ export const startStreamForwardTask = (task_id: number) => {
 export const stopStreamForwardTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: StreamForwardTask }>(
     'post',
-    `${STREAM_FORWARD_PREFIX}/task/${task_id}/stop`
+    `${STREAM_FORWARD_PREFIX}/task/${task_id}/stop`,
+    undefined,
+    {},
+    true,
+    'none',
+    LONG_RUNNING_TIMEOUT,
   );
 };
 
@@ -147,7 +181,12 @@ export const stopStreamForwardTask = (task_id: number) => {
 export const restartStreamForwardTask = (task_id: number) => {
   return commonApi<{ code: number; msg: string; data: StreamForwardTask }>(
     'post',
-    `${STREAM_FORWARD_PREFIX}/task/${task_id}/restart`
+    `${STREAM_FORWARD_PREFIX}/task/${task_id}/restart`,
+    undefined,
+    {},
+    true,
+    'none',
+    LONG_RUNNING_TIMEOUT,
   );
 };
 
@@ -224,6 +263,14 @@ export const ensureDeviceStreamForwardTask = (device_id: string) => {
       task_code: string;
       is_enabled: boolean;
     } | null;
-  }>('post', `${STREAM_FORWARD_PREFIX}/device/${device_id}/ensure-task`, {}, {}, true, 'none');
+  }>(
+    'post',
+    `${STREAM_FORWARD_PREFIX}/device/${device_id}/ensure-task`,
+    {},
+    {},
+    true,
+    'none',
+    LONG_RUNNING_TIMEOUT,
+  );
 };
 

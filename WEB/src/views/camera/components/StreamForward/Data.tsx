@@ -1,6 +1,7 @@
 // 推流转发任务表格列定义
 import { BasicColumn, FormProps } from "@/components/Table";
 import { Tag } from "ant-design-vue";
+import { formatClusterRuntime, formatSchedulePolicy } from '@/utils/clusterRuntime';
 
 export function getBasicColumns(): BasicColumn[] {
   return [
@@ -18,6 +19,20 @@ export function getBasicColumns(): BasicColumn[] {
           return '--';
         }
         return text.join(', ');
+      },
+    },
+    {
+      title: '推流引擎',
+      dataIndex: 'executor',
+      width: 120,
+      customRender: ({ text }) => {
+        const ex = String(text || 'cpp').toLowerCase();
+        const isCpp = ex === 'cpp' || ex === 'c++' || ex === 'runtime';
+        return (
+          <Tag color={isCpp ? 'orange' : 'blue'}>
+            {isCpp ? '性能优先' : '兼容优先'}
+          </Tag>
+        );
       },
     },
     {
@@ -53,6 +68,18 @@ export function getBasicColumns(): BasicColumn[] {
           </Tag>
         );
       },
+    },
+    {
+      title: '调度策略',
+      dataIndex: 'schedule_policy',
+      width: 110,
+      customRender: ({ text, record }) => formatSchedulePolicy(text, record),
+    },
+    {
+      title: '运行节点',
+      dataIndex: 'service_server_ip',
+      width: 180,
+      customRender: ({ record }) => formatClusterRuntime(record),
     },
     {
       title: '运行状态',

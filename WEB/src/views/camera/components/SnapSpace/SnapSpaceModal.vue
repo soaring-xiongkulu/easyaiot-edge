@@ -12,8 +12,8 @@
   >
     <template #footer>
       <div class="footer-buttons">
-        <a-button v-if="!isViewMode" @click="handleReset" class="mr-2">重置</a-button>
-        <a-button v-if="!isViewMode" type="primary" :loading="confirmLoading" @click="handleSubmit">提交</a-button>
+        <Button v-if="!isViewMode" @click="handleReset" class="mr-2">重置</Button>
+        <Button v-if="!isViewMode" type="primary" :loading="confirmLoading" @click="handleSubmit">提交</Button>
       </div>
     </template>
     
@@ -25,6 +25,14 @@
         </span>
       </a-divider>
       <BasicForm @register="registerForm" />
+      <div v-if="!isViewMode" class="save-time-field">
+        <div class="save-time-field__label">保存时间</div>
+        <SaveTimeInput v-model:value="saveTime" />
+      </div>
+      <div v-else class="save-time-field save-time-field--view">
+        <div class="save-time-field__label">保存时间</div>
+        <div class="save-time-field__value">{{ formatSaveTimeLabel(saveTime) }}</div>
+      </div>
       
       <div class="form-tips" v-if="!isViewMode">
         <a-alert
@@ -38,7 +46,7 @@
               <ul class="alert-list">
                 <li>空间名称用于标识和管理抓拍图片的存储空间</li>
                 <li>存储模式：标准存储适合频繁访问，归档存储成本更低</li>
-                <li>保存时间：设置为0表示永久保存，>=7表示保存天数</li>
+                <li>保存时间：0 表示永久保存；可设置天与小时，最短 1 小时</li>
               </ul>
             </div>
           </template>
@@ -55,7 +63,13 @@ import { BasicForm, useForm } from '@/components/Form';
 import { useMessage } from '@/hooks/web/useMessage';
 import { DatabaseOutlined } from '@ant-design/icons-vue';
 import { createSnapSpace, updateSnapSpace, type SnapSpace } from '@/api/device/snap';
-
+import { Button } from '@/components/Button';
+import SaveTimeInput from '@/views/camera/components/SpaceDirectoryManage/SaveTimeInput.vue';
+import {
+  DEFAULT_SAVE_TIME,
+  formatSaveTimeLabel,
+  isValidSaveTime,
+} from '@/views/camera/utils/spaceSaveTime';
 defineOptions({ name: 'SnapSpaceModal' });
 
 const { createMessage } = useMessage();
@@ -92,20 +106,6 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema }] = 
       helpMessage: '标准存储：适合频繁访问的场景，访问速度快；归档存储：成本更低，适合长期存储',
     },
     {
-      field: 'save_time',
-      label: '保存时间（天）',
-      component: 'InputNumber',
-      required: true,
-      componentProps: {
-        placeholder: '请输入保存天数',
-        min: 0,
-        precision: 0,
-        style: { width: '100%' },
-        addonAfter: '天',
-      },
-      helpMessage: '设置为0表示永久保存，>=7表示保存天数（单位：天）',
-    },
-    {
       field: 'description',
       label: '空间描述',
       component: 'InputTextArea',
@@ -123,6 +123,7 @@ const [registerForm, { setFieldsValue, validate, resetFields, updateSchema }] = 
 
 const modalData = ref<{ type?: string; record?: SnapSpace }>({});
 const confirmLoading = ref(false);
+const saveTime = ref(DEFAULT_SAVE_TIME);
 
 const modalTitle = computed(() => {
   if (modalData.value.type === 'view') return '查看抓拍空间';
@@ -150,18 +151,14 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         componentProps: { disabled: false },
       },
       {
-        field: 'save_time',
-        componentProps: { disabled: false },
-      },
-      {
         field: 'description',
         componentProps: { disabled: false },
       },
     ]);
+    saveTime.value = data.record.save_time ?? DEFAULT_SAVE_TIME;
     setFieldsValue({
       space_name: data.record.space_name,
       save_mode: data.record.save_mode,
-      save_time: data.record.save_time,
       description: data.record.description,
     });
     setDrawerProps({ showOkBtn: true });
@@ -177,18 +174,14 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         componentProps: { disabled: true },
       },
       {
-        field: 'save_time',
-        componentProps: { disabled: true },
-      },
-      {
         field: 'description',
         componentProps: { disabled: true },
       },
     ]);
+    saveTime.value = data.record.save_time ?? DEFAULT_SAVE_TIME;
     setFieldsValue({
       space_name: data.record.space_name,
       save_mode: data.record.save_mode,
-      save_time: data.record.save_time,
       description: data.record.description,
     });
     setDrawerProps({ showOkBtn: false });
@@ -204,14 +197,11 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
         componentProps: { disabled: false },
       },
       {
-        field: 'save_time',
-        componentProps: { disabled: false },
-      },
-      {
         field: 'description',
         componentProps: { disabled: false },
       },
     ]);
+    saveTime.value = DEFAULT_SAVE_TIME;
     setDrawerProps({ showOkBtn: true });
   }
 });
@@ -219,11 +209,16 @@ const [register, { setDrawerProps, closeDrawer }] = useDrawerInner(async (data) 
 const handleSubmit = async () => {
   try {
     const values = await validate();
+    if (!isValidSaveTime(saveTime.value)) {
+      createMessage.warning('保存时间须为永久，或不少于 1 小时');
+      return;
+    }
     confirmLoading.value = true;
     setDrawerProps({ confirmLoading: true });
-    
+    const payload = { ...values, save_time: saveTime.value };
+
     if (modalData.value.type === 'edit' && modalData.value.record) {
-      const response = await updateSnapSpace(modalData.value.record.id, values);
+      const response = await updateSnapSpace(modalData.value.record.id, payload);
       if (response.code === 0) {
         createMessage.success('更新成功');
         closeDrawer();
@@ -232,7 +227,7 @@ const handleSubmit = async () => {
         createMessage.error(response.msg || '更新失败');
       }
     } else {
-      const response = await createSnapSpace(values);
+      const response = await createSnapSpace(payload);
       if (response.code === 0) {
         createMessage.success('创建成功');
         closeDrawer();
@@ -269,9 +264,9 @@ const handleReset = () => {
     setFieldsValue({
       space_name: modalData.value.record.space_name,
       save_mode: modalData.value.record.save_mode,
-      save_time: modalData.value.record.save_time,
       description: modalData.value.record.description,
     });
+    saveTime.value = modalData.value.record.save_time ?? DEFAULT_SAVE_TIME;
   }
 };
 </script>
@@ -296,13 +291,32 @@ const handleReset = () => {
     font-size: 16px;
     font-weight: 500;
     color: rgba(0, 0, 0, 0.85);
-    
+
     .section-icon {
       color: #1890ff;
       font-size: 18px;
     }
   }
-  
+
+  .save-time-field {
+    margin: 0 0 24px 120px;
+
+    &__label {
+      margin-bottom: 8px;
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.88);
+    }
+
+    &__value {
+      font-size: 14px;
+      color: rgba(0, 0, 0, 0.65);
+    }
+
+    &--view {
+      margin-bottom: 16px;
+    }
+  }
+
   .form-tips {
     margin-top: 24px;
     

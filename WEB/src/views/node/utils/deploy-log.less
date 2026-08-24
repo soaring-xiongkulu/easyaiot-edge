@@ -1,0 +1,136 @@
+.deploy-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.deploy-progress__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.deploy-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px solid #e8e8e8;
+  background: #fafafa;
+  color: rgba(0, 0, 0, 0.45);
+
+  &.is-success {
+    border-color: #b7eb8f;
+    background: #f6ffed;
+    color: #389e0d;
+  }
+
+  &.is-error {
+    border-color: #ffccc7;
+    background: #fff2f0;
+    color: #cf1322;
+  }
+
+  &.is-running {
+    border-color: #91caff;
+    background: #e6f4ff;
+    color: #0958d9;
+  }
+}
+
+.deploy-step__icon {
+  font-size: 13px;
+}
+
+.deploy-step__name {
+  white-space: nowrap;
+}
+
+.deploy-progress__alert {
+  :deep(.ant-alert-message) {
+    font-size: 13px;
+  }
+}
+
+.deploy-log {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.deploy-log__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+}
+
+.deploy-log__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #262626;
+}
+
+.deploy-log__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.deploy-log__body {
+  min-height: 240px;
+  max-height: 420px;
+  overflow: auto;
+  background: #f5f5f5;
+  border: 1px solid #d9d9d9;
+  border-radius: 0 0 4px 4px;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: #fafafa;
+    border-radius: 4px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: #bfbfbf;
+    border-radius: 4px;
+
+    &:hover {
+      background: #999;
+    }
+  }
+
+  &.is-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  pre {
+    margin: 0;
+    padding: 16px;
+    font-family: Consolas, Monaco, 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #262626;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    word-break: break-all;
+  }
+}
+
+.deploy-log__placeholder {
+  color: rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+}

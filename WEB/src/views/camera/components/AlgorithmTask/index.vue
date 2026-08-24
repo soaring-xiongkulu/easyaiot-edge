@@ -4,18 +4,18 @@
     <BasicTable v-if="viewMode === 'table'" @register="registerTable">
       <template #toolbar>
         <div class="toolbar-buttons">
-          <a-button type="primary" @click="handleCreate">
+          <Button type="primary" @click="handleCreate">
             <template #icon>
               <PlusOutlined />
             </template>
             新建算法任务
-          </a-button>
-          <a-button @click="handleToggleViewMode" type="default">
+          </Button>
+          <Button @click="handleToggleViewMode" type="default">
             <template #icon>
               <SwapOutlined />
             </template>
             切换视图
-          </a-button>
+          </Button>
         </div>
       </template>
       <template #bodyCell="{ column, record }">
@@ -42,18 +42,18 @@
                 style="display: flex;align-items: center;justify-content: space-between;flex-direction: row;">
                 <span style="padding-left: 7px;font-size: 16px;font-weight: 500;line-height: 24px;">算法任务列表</span>
                 <div style="display: flex; gap: 8px;">
-                  <a-button type="primary" @click="handleCreate">
+                  <Button type="primary" @click="handleCreate">
                     <template #icon>
                       <PlusOutlined />
                     </template>
                     新建算法任务
-                  </a-button>
-                  <a-button @click="handleToggleViewMode" type="default">
+                  </Button>
+                  <Button @click="handleToggleViewMode" type="default">
                     <template #icon>
                       <SwapOutlined />
                     </template>
                     切换视图
-                  </a-button>
+                  </Button>
                 </div>
               </div>
             </template>
@@ -66,7 +66,7 @@
                     <div class="flex" style="justify-content: space-between;">
                       <div class="prop">
                         <div class="label">任务类型</div>
-                        <div class="value">{{ item.task_type === 'realtime' ? '实时算法任务' : '抓拍算法任务' }}</div>
+                        <div class="value">{{ formatTaskTypeLabel(item) }}</div>
                       </div>
                       <div class="prop" v-if="item.device_names && item.device_names.length > 0">
                         <div class="label">关联摄像头</div>
@@ -105,13 +105,12 @@
                     >
                       <Icon icon="ant-design:edit-filled" :size="15" color="#3B82F6" />
                     </div>
-                    <div 
-                      class="btn" 
-                      :class="{ disabled: item.is_enabled || !hasModels(item) || !hasCameras(item) }"
-                      @click="!item.is_enabled && hasModels(item) && hasCameras(item) && handleOpenRegionDetection(item)" 
-                      :title="item.is_enabled ? '任务运行中，无法配置' : !hasModels(item) ? '请先配置算法模型列表' : !hasCameras(item) ? '请先配置摄像头列表' : '区域检测配置'"
+                    <div
+                      class="btn"
+                      @click="handleOpenPostProcess(item)"
+                      :title="item.post_process_enabled ? '编辑业务脚本' : '编辑业务脚本（需先在任务配置中开启）'"
                     >
-                      <Icon icon="ant-design:aim-outlined" :size="15" color="#3B82F6" />
+                      <Icon icon="ant-design:code-outlined" :size="15" color="#3B82F6" />
                     </div>
                     <div class="btn" @click="handleManageServices(item)" title="心跳信息">
                       <Icon icon="ant-design:heart-outlined" :size="15" color="#3B82F6" />
@@ -125,11 +124,33 @@
                     >
                       <Icon icon="ant-design:folder-outlined" :size="15" color="#3B82F6" />
                     </div>
-                    <div class="btn" v-if="item.is_enabled" @click="handleStop(item)">
-                      <Icon icon="ant-design:pause-circle-outlined" :size="15" color="#3B82F6" />
+                    <div
+                      class="btn"
+                      :class="{ disabled: isTaskPending(item.id) }"
+                      v-if="item.is_enabled"
+                      @click="!isTaskPending(item.id) && handleStop(item)"
+                      :title="isTaskPending(item.id) ? '处理中…' : '停止'"
+                    >
+                      <Icon
+                        :icon="isTaskPending(item.id) ? 'ant-design:loading-outlined' : 'ant-design:pause-circle-outlined'"
+                        :spin="isTaskPending(item.id)"
+                        :size="15"
+                        color="#3B82F6"
+                      />
                     </div>
-                    <div class="btn" v-else @click="handleStart(item)">
-                      <Icon icon="ant-design:play-circle-outlined" :size="15" color="#3B82F6" />
+                    <div
+                      class="btn"
+                      :class="{ disabled: isTaskPending(item.id) }"
+                      v-else
+                      @click="!isTaskPending(item.id) && handleStart(item)"
+                      :title="isTaskPending(item.id) ? '处理中…' : '启动'"
+                    >
+                      <Icon
+                        :icon="isTaskPending(item.id) ? 'ant-design:loading-outlined' : 'ant-design:play-circle-outlined'"
+                        :spin="isTaskPending(item.id)"
+                        :size="15"
+                        color="#3B82F6"
+                      />
                     </div>
                     <Popconfirm
                       title="是否确认删除？"
@@ -168,9 +189,6 @@
     <!-- 服务管理抽屉 -->
     <ServiceManageDrawer @register="registerServiceDrawer" @success="handleSuccess" />
     
-    <!-- 区域检测配置抽屉 -->
-    <DeviceRegionDetectionDrawer @register="registerRegionDrawer" />
-    
     <!-- 抓拍空间抽屉 -->
     <SnapSpaceDrawer @register="registerSnapSpaceDrawer" />
     
@@ -178,50 +196,17 @@
     <DialogPlayer @register="registerPlayerModal" />
     
     <!-- 摄像头选择模态框 -->
-    <BasicModal
+    <CameraStreamSelectModal
       v-model:open="cameraSelectVisible"
-      title="选择摄像头"
-      @ok="handleConfirmCamera"
-      @cancel="cameraSelectVisible = false"
-    >
-      <div v-if="cameraStreams.length === 0" style="text-align: center; padding: 20px;">
-        <Empty description="暂无可用推流地址" />
-      </div>
-      <RadioGroup v-else v-model:value="selectedCameraIndex" style="width: 100%;">
-        <Radio
-          v-for="(stream, index) in cameraStreams"
-          :key="stream.device_id"
-          :value="index"
-          style="display: block; margin-bottom: 12px;"
-        >
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <!-- 封面图 -->
-            <div v-if="stream.cover_image_path" style="width: 80px; height: 60px; flex-shrink: 0;">
-              <img
-                :src="stream.cover_image_path"
-                alt="封面图"
-                style="width: 100%; height: 100%; object-fit: cover; border-radius: 4px;"
-              />
-            </div>
-            <div v-else style="width: 80px; height: 60px; flex-shrink: 0; background: #f0f0f0; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 12px;">
-              无封面
-            </div>
-            <!-- 设备信息 -->
-            <div style="flex: 1;">
-              <div style="font-weight: 500;">{{ stream.device_name }}</div>
-              <div style="font-size: 12px; color: #999; margin-top: 4px;">
-                {{ stream.ai_http_stream || stream.pusher_http_url || stream.http_stream || stream.pusher_rtmp_url || stream.rtmp_stream || '无推流地址' }}
-              </div>
-            </div>
-          </div>
-        </Radio>
-      </RadioGroup>
-    </BasicModal>
+      :streams="cameraStreams"
+      :task-name="currentTask?.task_name"
+      @confirm="playCameraStream"
+    />
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, nextTick } from 'vue';
 import {
   PlusOutlined,
   EyeOutlined,
@@ -233,7 +218,7 @@ import {
   SwapOutlined,
   CopyOutlined,
 } from '@ant-design/icons-vue';
-import { List, Popconfirm, Spin, Empty, RadioGroup, Radio } from 'ant-design-vue';
+import { List, Popconfirm, Spin } from 'ant-design-vue';
 import { useDrawer } from '@/components/Drawer';
 import { BasicForm, useForm } from '@/components/Form';
 import { BasicTable, TableAction, useTable } from '@/components/Table';
@@ -241,7 +226,6 @@ import { useMessage } from '@/hooks/web/useMessage';
 import { Icon } from '@/components/Icon';
 import { copyText } from '@/utils/copyTextToClipboard';
 import { useModal } from '@/components/Modal';
-import { BasicModal } from '@/components/Modal';
 import {
   listAlgorithmTasks,
   deleteAlgorithmTask,
@@ -249,23 +233,27 @@ import {
   stopAlgorithmTask,
   updateAlgorithmTask,
   getTaskStreams,
+  getPostProcessIdeUrl,
   type AlgorithmTask,
   type CameraStreamInfo,
 } from '@/api/device/algorithm_task';
 import AlgorithmTaskModal from './AlgorithmTaskModal.vue';
 import ServiceManageDrawer from './ServiceManageDrawer.vue';
-import DeviceRegionDetectionDrawer from './DeviceRegionDetectionDrawer.vue';
 import SnapSpaceDrawer from './SnapSpaceDrawer.vue';
 import DialogPlayer from '@/components/VideoPlayer/DialogPlayer.vue';
+import CameraStreamSelectModal from '../CameraStreamSelectModal/index.vue';
 import { getBasicColumns, getFormConfig } from './Data';
 import AI_TASK_IMAGE from '@/assets/images/video/ai-task.png';
 import SNAP_TASK_IMAGE from '@/assets/images/video/snap-task.png';
-
+import { Button } from '@/components/Button'
+import { useGo } from '@/hooks/web/usePage';
+import { rewriteStreamHostToPageHost } from '@/views/camera/utils/devicePlay';
 const ListItem = List.Item;
 
 defineOptions({ name: 'AlgorithmTask' });
 
 const { createMessage } = useMessage();
+const go = useGo();
 
 // 视图模式（默认卡片模式）
 const viewMode = ref<'table' | 'card'>('card');
@@ -273,16 +261,27 @@ const viewMode = ref<'table' | 'card'>('card');
 // 卡片模式相关
 const taskList = ref<AlgorithmTask[]>([]);
 const loading = ref(false);
+
+// 启动/停止请求进行中的任务 ID（防止接口未返回前重复点击导致多次调用）
+const pendingTaskIds = ref<number[]>([]);
+const isTaskPending = (id: number) => pendingTaskIds.value.includes(id);
+const setTaskPending = (id: number, pending: boolean) => {
+  if (pending) {
+    if (!pendingTaskIds.value.includes(id)) {
+      pendingTaskIds.value = [...pendingTaskIds.value, id];
+    }
+  } else {
+    pendingTaskIds.value = pendingTaskIds.value.filter((x) => x !== id);
+  }
+};
 const [registerModal, { openDrawer }] = useDrawer();
 const [registerServiceDrawer, { openDrawer: openServiceDrawer }] = useDrawer();
-const [registerRegionDrawer, { openDrawer: openRegionDrawer }] = useDrawer();
 const [registerSnapSpaceDrawer, { openDrawer: openSnapSpaceDrawer }] = useDrawer();
 const [registerPlayerModal, { openModal: openPlayerModal }] = useModal();
 
 // 摄像头选择和播放相关
 const cameraSelectVisible = ref(false);
 const cameraStreams = ref<CameraStreamInfo[]>([]);
-const selectedCameraIndex = ref<number>(0);
 const currentTask = ref<AlgorithmTask | null>(null);
 
 // 分页相关
@@ -293,9 +292,23 @@ const total = ref(0);
 // 搜索参数
 const searchParams = ref<{
   search?: string;
-  task_type?: 'realtime' | 'snap';
+  task_type?: 'realtime' | 'snap' | 'patrol';
   is_enabled?: boolean;
 }>({});
+
+function formatTaskTypeLabel(item: { task_type?: string; executor?: string }) {
+  const base =
+    item.task_type === 'realtime'
+      ? '实时视频分析'
+      : item.task_type === 'patrol'
+        ? '周期巡检分析'
+        : '事件抓拍分析';
+  const ex = String(item.executor || 'python').toLowerCase();
+  if (ex === 'cpp' || ex === 'c++' || ex === 'runtime' || ex === 'cxx') {
+    return `${base}（低时延）`;
+  }
+  return `${base}（全功能）`;
+}
 
 // 表格模式配置
 const [registerTable, { reload }] = useTable({
@@ -336,11 +349,6 @@ const hasCameras = (record: AlgorithmTask) => {
          (record.device_names && record.device_names.length > 0);
 };
 
-// 检查任务是否有算法模型列表
-const hasModels = (record: AlgorithmTask) => {
-  return record.model_ids && Array.isArray(record.model_ids) && record.model_ids.length > 0;
-};
-
 // 复制摄像头名称
 const handleCopyDeviceNames = (item: AlgorithmTask) => {
   if (!item.device_names || item.device_names.length === 0) {
@@ -372,30 +380,9 @@ const getTableActions = (record: AlgorithmTask) => {
       },
     },
     {
-      icon: 'ant-design:aim-outlined',
-      tooltip: record.is_enabled
-        ? '任务运行中，无法配置'
-        : !hasModels(record) 
-        ? '请先配置算法模型列表' 
-        : !hasCameras(record) 
-        ? '请先配置摄像头列表' 
-        : '区域检测配置',
-      disabled: record.is_enabled || !hasModels(record) || !hasCameras(record),
-      onClick: () => {
-        if (record.is_enabled) {
-          createMessage.warning('任务运行中，无法配置，请先停止任务');
-          return;
-        }
-        if (!hasModels(record)) {
-          createMessage.warning('请先配置算法模型列表');
-          return;
-        }
-        if (!hasCameras(record)) {
-          createMessage.warning('请先配置摄像头列表');
-          return;
-        }
-        handleOpenRegionDetection(record);
-      },
+      icon: 'ant-design:code-outlined',
+      tooltip: record.post_process_enabled ? '编辑业务脚本' : '编辑业务脚本（需先在任务配置中开启）',
+      onClick: () => handleOpenPostProcess(record),
     },
     {
       icon: 'ant-design:folder-outlined',
@@ -422,14 +409,19 @@ const getTableActions = (record: AlgorithmTask) => {
 
   if (record.is_enabled) {
     actions.push({
-      icon: 'ant-design:pause-circle-outlined',
-      tooltip: '停止',
+      // pending 时隐藏静态图标，改用 a-button 自带 loading 转圈，避免出现双图标
+      icon: isTaskPending(record.id) ? undefined : 'ant-design:pause-circle-outlined',
+      loading: isTaskPending(record.id),
+      tooltip: isTaskPending(record.id) ? '处理中…' : '停止',
+      disabled: isTaskPending(record.id),
       onClick: () => handleStop(record),
     });
   } else {
     actions.push({
-      icon: 'ant-design:play-circle-outlined',
-      tooltip: '启动',
+      icon: isTaskPending(record.id) ? undefined : 'ant-design:play-circle-outlined',
+      loading: isTaskPending(record.id),
+      tooltip: isTaskPending(record.id) ? '处理中…' : '启动',
+      disabled: isTaskPending(record.id),
       onClick: () => handleStart(record),
     });
   }
@@ -547,8 +539,8 @@ const [registerForm, { validate }] = useForm({
         placeholder: '请选择任务类型',
         options: [
           { value: '', label: '全部' },
-          { value: 'realtime', label: '实时算法任务' },
-          { value: 'snap', label: '抓拍算法任务' },
+          { value: 'realtime', label: '实时视频分析' },
+          { value: 'snap', label: '事件抓拍分析' },
         ],
       },
     },
@@ -595,21 +587,6 @@ const handleManageServices = (record: AlgorithmTask) => {
   openServiceDrawer(true, { taskId: record.id });
 };
 
-const handleOpenRegionDetection = (record?: AlgorithmTask) => {
-  // 校验：只有在停用状态下才能配置区域检测
-  if (record && record.is_enabled) {
-    createMessage.warning('任务运行中，无法配置，请先停止任务');
-    return;
-  }
-  if (record) {
-    // 传入任务ID，只显示该任务关联的摄像头
-    openRegionDrawer(true, { taskId: record.id });
-  } else {
-    // 兼容旧逻辑：不传入任务ID，显示所有摄像头
-    openRegionDrawer(true);
-  }
-};
-
 const handleOpenSnapSpace = (record: AlgorithmTask) => {
   if (!record.device_ids || record.device_ids.length === 0) {
     createMessage.warning('任务未关联摄像头');
@@ -620,6 +597,38 @@ const handleOpenSnapSpace = (record: AlgorithmTask) => {
     deviceIds: record.device_ids,
     deviceNames: record.device_names || []
   });
+};
+
+const parsePostProcessIdeUrl = (ideUrl: string) => {
+  const normalized = ideUrl.startsWith('/') ? ideUrl : `/${ideUrl}`;
+  const qIndex = normalized.indexOf('?');
+  const basePath = qIndex >= 0 ? normalized.slice(0, qIndex) : normalized;
+  const search = qIndex >= 0 ? normalized.slice(qIndex + 1) : '';
+  const folder = search ? new URLSearchParams(search).get('folder') || '' : '';
+  return { basePath, folder };
+};
+
+const handleOpenPostProcess = async (record: AlgorithmTask) => {
+  try {
+    const response = await getPostProcessIdeUrl(record.id);
+    const ideUrl = response?.ide_url;
+    if (!ideUrl) {
+      createMessage.error('获取后处理 IDE 地址失败');
+      return;
+    }
+    const { basePath, folder } = parsePostProcessIdeUrl(ideUrl);
+    go({
+      path: `/algorithm-post-process/${record.id}`,
+      query: {
+        path: basePath,
+        ...(folder ? { folder } : {}),
+        title: record.task_name || String(record.id),
+      },
+    });
+  } catch (error) {
+    console.error('打开后处理 IDE 失败', error);
+    createMessage.error('打开后处理 IDE 失败');
+  }
 };
 
 const handleDelete = async (record: AlgorithmTask) => {
@@ -643,6 +652,8 @@ const handleDelete = async (record: AlgorithmTask) => {
 };
 
 const handleStart = async (record: AlgorithmTask) => {
+  if (isTaskPending(record.id)) return;
+  setTaskPending(record.id, true);
   try {
     const response = await startAlgorithmTask(record.id);
     // 由于 isTransformResponse: true，成功时返回的是任务对象（data.data），而不是包含 code 的响应对象
@@ -673,10 +684,14 @@ const handleStart = async (record: AlgorithmTask) => {
   } catch (error) {
     console.error('启动算法任务失败', error);
     createMessage.error('启动失败');
+  } finally {
+    setTaskPending(record.id, false);
   }
 };
 
 const handleStop = async (record: AlgorithmTask) => {
+  if (isTaskPending(record.id)) return;
+  setTaskPending(record.id, true);
   try {
     const response = await stopAlgorithmTask(record.id);
     // 由于 isTransformResponse: true，成功时返回的是任务对象，而不是包含 code 的响应对象
@@ -697,6 +712,8 @@ const handleStop = async (record: AlgorithmTask) => {
   } catch (error) {
     console.error('停止算法任务失败', error);
     createMessage.error('停止失败');
+  } finally {
+    setTaskPending(record.id, false);
   }
 };
 
@@ -719,11 +736,17 @@ const handleToggleEnabled = async (record: AlgorithmTask) => {
   }
 };
 
-const handleSuccess = () => {
+const handleSuccess = async () => {
   if (viewMode.value === 'table') {
-    reload();
+    await nextTick();
+    try {
+      await reload();
+    } catch (error) {
+      // BasicTable 未挂载时（v-if 切换/tab 切换）会抛错，避免 Uncaught promise
+      console.warn('算法任务表格未就绪，跳过刷新', error);
+    }
   } else {
-    loadTasks();
+    await loadTasks();
   }
 };
 
@@ -787,21 +810,11 @@ const handlePlayStream = async (record: AlgorithmTask) => {
     } else {
       // 多个摄像头，显示选择对话框
       cameraStreams.value = availableStreams;
-      selectedCameraIndex.value = 0;
       cameraSelectVisible.value = true;
     }
   } catch (error) {
     console.error('获取推流地址失败', error);
     createMessage.error('获取推流地址失败');
-  }
-};
-
-// 确认选择摄像头并播放
-const handleConfirmCamera = () => {
-  if (cameraStreams.value.length > 0 && selectedCameraIndex.value >= 0) {
-    const selectedStream = cameraStreams.value[selectedCameraIndex.value];
-    playCameraStream(selectedStream);
-    cameraSelectVisible.value = false;
   }
 };
 
@@ -874,14 +887,16 @@ const playCameraStream = (stream: CameraStreamInfo) => {
     createMessage.warning(`摄像头 ${stream.device_name} 暂无推流地址`);
     return;
   }
-  
+
+  // 算法任务播放由当前 WEB nginx 代理 /ai、/live，禁止浏览器直连服务端返回的媒体节点地址
+  httpStream = rewriteStreamHostToPageHost(httpStream, { forcePageProxy: true });
+
   // 打开播放器
   openPlayerModal(true, {
     id: stream.device_id,
     http_stream: httpStream,
   });
 };
-
 
 // 暴露刷新方法给父组件
 defineExpose({
@@ -1137,4 +1152,3 @@ onMounted(() => {
   }
 }
 </style>
-

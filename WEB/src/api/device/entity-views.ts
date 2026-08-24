@@ -140,7 +140,7 @@ export const getLog = ({ module, id, params }) => {
   defHttp.setHeader({ 'X-Authorization': 'Bearer ' + localStorage.getItem('jwt_token') });
   return defHttp.get(
     {
-      url: Api.Log + `${module}/${id}`,
+      url: `/device/log/${id}`,
       params,
     },
    { isTransformResponse: true },

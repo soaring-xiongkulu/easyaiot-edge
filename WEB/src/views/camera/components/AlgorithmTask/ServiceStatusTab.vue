@@ -6,10 +6,10 @@
         <a-col :span="24" v-if="task.extractor_id">
           <a-card title="抽帧器状态" :bordered="false" class="service-card">
             <template #extra>
-              <a-button type="link" @click="handleViewLogs('extractor')" :disabled="!task.extractor_id">
+              <Button type="link" @click="handleViewLogs('extractor')" :disabled="!task.extractor_id">
                 <template #icon><FileTextOutlined /></template>
                 查看日志
-              </a-button>
+              </Button>
             </template>
             <a-descriptions :column="2" bordered size="small">
               <a-descriptions-item label="抽帧器名称">
@@ -40,10 +40,10 @@
         <a-col :span="24" v-if="task.sorter_id">
           <a-card title="排序器状态" :bordered="false" class="service-card">
             <template #extra>
-              <a-button type="link" @click="handleViewLogs('sorter')" :disabled="!task.sorter_id">
+              <Button type="link" @click="handleViewLogs('sorter')" :disabled="!task.sorter_id">
                 <template #icon><FileTextOutlined /></template>
                 查看日志
-              </a-button>
+              </Button>
             </template>
             <a-descriptions :column="2" bordered size="small">
               <a-descriptions-item label="排序器名称">
@@ -74,10 +74,10 @@
         <a-col :span="24" v-if="task.pusher_id">
           <a-card title="推送器状态" :bordered="false" class="service-card">
             <template #extra>
-              <a-button type="link" @click="handleViewLogs('pusher')" :disabled="!task.pusher_id">
+              <Button type="link" @click="handleViewLogs('pusher')" :disabled="!task.pusher_id">
                 <template #icon><FileTextOutlined /></template>
                 查看日志
-              </a-button>
+              </Button>
             </template>
             <a-descriptions :column="2" bordered size="small">
               <a-descriptions-item label="推送器名称">
@@ -118,7 +118,7 @@
 
 <script lang="ts" setup>
 import { ref, watch, onMounted } from 'vue';
-import { Card, Descriptions, DescriptionsItem, Tag, Button, Spin, Row, Col, Empty } from 'ant-design-vue';
+import { Card, Descriptions, DescriptionsItem, Tag as AntButton, Spin, Row, Col, Empty } from 'ant-design-vue';
 import { FileTextOutlined } from '@ant-design/icons-vue';
 import { useModal } from '@/components/Modal';
 import { 
@@ -131,7 +131,7 @@ import {
 import type { AlgorithmTask, FrameExtractor, Sorter, Pusher } from '@/api/device/algorithm_task';
 import moment from 'moment';
 import ServiceLogsModal from './ServiceLogsModal.vue';
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'ServiceStatusTab' });
 
 const props = defineProps<{

@@ -23,6 +23,7 @@ import {
   type DeviceDirectory,
   type DeviceInfo,
 } from '@/api/device/camera';
+import { formatCameraDeviceLabel } from '@/views/camera/utils/deviceLabel';
 
 const emit = defineEmits(['success', 'register']);
 
@@ -172,7 +173,7 @@ const loadDeviceOptions = async () => {
     const data = response.code !== undefined ? response.data : response;
     if (data && Array.isArray(data)) {
       deviceOptions.value = data.map((device: DeviceInfo) => ({
-        label: `${device.name || device.id} (${device.model || '-'})`,
+        label: `${formatCameraDeviceLabel(device)} (${device.model || '-'})`,
         value: device.id,
       }));
       

@@ -87,7 +87,7 @@ const [register, { setModalProps, closeModal }] = useModalInner(async (data) => 
   if (data.type === 'edit' && data.record) {
     setFieldsValue({
       name: data.record.name,
-      parent_id: data.record.parent_id,
+      parent_id: data.record.parent_id ?? undefined,
       description: data.record.description,
       sort_order: data.record.sort_order,
     });

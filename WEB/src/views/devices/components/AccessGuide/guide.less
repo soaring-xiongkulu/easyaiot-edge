@@ -1,0 +1,196 @@
+@import '../styles/device-ops.less';
+
+.access-guide {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* 覆盖详情页 :deep(.ant-tabs){ flex:1 }，避免 Tab 内容被挤到底部 */
+.access-guide-tabs {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+
+  :deep(.ant-tabs-nav) {
+    flex-shrink: 0;
+    margin-bottom: 0;
+  }
+
+  :deep(.ant-tabs-content-holder) {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  :deep(.ant-tabs-content) {
+    height: 100%;
+  }
+
+  :deep(.ant-tabs-tabpane) {
+    height: 100%;
+    overflow-y: auto;
+    padding-top: 12px;
+  }
+}
+
+.guide-tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 8px;
+}
+
+.guide-alert {
+  margin-bottom: 0;
+}
+
+.guide-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: @ops-muted;
+  line-height: 1.5;
+
+  code {
+    color: @ops-ink;
+  }
+}
+
+.guide-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+
+  &__text {
+    font-size: 12px;
+    color: @ops-muted;
+  }
+
+  &__label {
+    font-size: 12px;
+    color: @ops-muted;
+  }
+}
+
+.guide-code {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #0b1220;
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow: auto;
+  max-height: 160px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.guide-code-editor {
+  min-height: 120px;
+  max-height: 200px;
+
+  :deep(.CodeMirror) {
+    min-height: 120px;
+    max-height: 200px;
+  }
+}
+
+.guide-accept {
+  margin-top: 8px;
+  font-size: 12px;
+  color: @ops-muted;
+  line-height: 1.45;
+}
+
+.guide-topic {
+  font-size: 11px;
+  word-break: break-all;
+  color: @ops-ink;
+}
+
+.guide-step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: @ops-accent;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.guide-check-icon {
+  color: @ops-accent;
+  margin-right: 8px;
+}
+
+.ops-toolbar--flat {
+  margin-bottom: 0;
+  padding: 8px 12px;
+}
+
+.ops-field-label {
+  font-size: 12px;
+  color: @ops-muted;
+
+  code {
+    color: @ops-ink;
+  }
+}
+
+.ops-surface-body--table {
+  padding: 0;
+
+  :deep(.basic-table) {
+    padding: 0;
+  }
+}
+
+:deep(.auth-value-row) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+:deep(.auth-value) {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  font-size: 12px;
+}
+
+:deep(.ant-list-item) {
+  font-size: 13px;
+}
+
+.ml-2 {
+  margin-left: 8px;
+}
+
+.guide-industrial-step {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 8px;
+
+  strong {
+    color: rgba(0, 0, 0, 0.88);
+  }
+
+  span {
+    color: rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+  }
+}

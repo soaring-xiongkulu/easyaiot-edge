@@ -28,7 +28,7 @@
               </div>
             </div>
             <div class="camera-actions">
-              <a-button 
+              <Button 
                 type="primary"
                 :loading="camera.loading"
                 @click="handleViewSnapSpace(camera)"
@@ -38,33 +38,29 @@
                   <FolderOutlined />
                 </template>
                 {{ camera.space ? '打开抓拍空间' : '暂无抓拍空间' }}
-              </a-button>
+              </Button>
             </div>
           </div>
         </div>
       </Spin>
     </div>
-    
-    <!-- 抓拍图片查看模态框 -->
-    <SnapImageModal @register="registerSnapImageModal"/>
   </BasicDrawer>
 </template>
 
 <script lang="ts" setup>
-import { ref, computed } from 'vue';
+import { ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { BasicDrawer, useDrawerInner } from '@/components/Drawer';
-import { useModal } from '@/components/Modal';
-import { Button, Empty, Spin } from 'ant-design-vue';
+import { Empty, Spin } from 'ant-design-vue';
 import { FolderOutlined } from '@ant-design/icons-vue';
 import { Icon } from '@/components/Icon';
 import { useMessage } from '@/hooks/web/useMessage';
 import { getSnapSpaceByDeviceId, type SnapSpace } from '@/api/device/snap';
-import SnapImageModal from '@/views/camera/components/SnapSpace/SnapImageModal.vue';
-
+import { Button } from '@/components/Button'
 defineOptions({ name: 'SnapSpaceDrawer' });
 
+const router = useRouter();
 const { createMessage } = useMessage();
-const [registerSnapImageModal, { openModal: openSnapImageModal }] = useModal();
 
 const loading = ref(false);
 const cameraList = ref<Array<{
@@ -127,10 +123,7 @@ const handleViewSnapSpace = async (camera: typeof cameraList.value[0]) => {
   // 直接打开对应摄像头的抓拍空间，不需要再次选择
   camera.loading = true;
   try {
-    openSnapImageModal(true, {
-      space_id: camera.space.id,
-      space_name: camera.space.space_name || camera.device_name || `设备 ${camera.device_id} 的抓拍空间`,
-    });
+    router.push({ path: `/snap-space-manage/${camera.space.id}`, query: { view: 'alerts' } });
   } catch (error) {
     console.error('打开抓拍空间失败:', error);
     createMessage.error('打开抓拍空间失败');

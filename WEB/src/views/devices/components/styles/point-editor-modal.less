@@ -1,0 +1,143 @@
+// 点位添加/编辑弹框 — 宽幅分区，覆盖全局 Modal 紧凑 padding
+.point-editor-modal {
+  .ant-modal {
+    padding-bottom: 0 !important;
+    max-width: calc(100vw - 32px);
+  }
+
+  .ant-modal-content {
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff !important;
+    box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+  }
+
+  .ant-modal-header {
+    margin: 0 !important;
+    padding: 0 !important;
+    border-bottom: 1px solid #f0f0f0;
+    background: #fff;
+  }
+
+  .ant-modal-close {
+    top: 22px;
+    right: 20px;
+  }
+
+  .ant-modal-body {
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+  }
+
+  .ant-modal-footer {
+    margin: 0 !important;
+    padding: 16px 28px !important;
+    border-top: 1px solid #e8e8e8;
+    background: #fff;
+  }
+}
+
+.point-editor-title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 22px 56px 18px 28px;
+
+  .point-editor-title-main {
+    font-size: 22px;
+    font-weight: 600;
+    color: #141414;
+    line-height: 30px;
+    letter-spacing: -0.02em;
+  }
+
+  .point-editor-title-sub {
+    font-size: 14px;
+    font-weight: 400;
+    color: #8c8c8c;
+    line-height: 22px;
+  }
+}
+
+.point-editor-shell {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.point-editor-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 28px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.point-editor-context-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+}
+
+.point-editor-context-item {
+  font-size: 14px;
+  color: #595959;
+  line-height: 22px;
+
+  strong {
+    margin-left: 8px;
+    color: #141414;
+    font-weight: 600;
+    font-size: 15px;
+  }
+}
+
+.point-editor-context-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: #e6f4ff;
+  color: #1677ff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.point-editor-body {
+  padding: 24px 28px 12px;
+  background: #fafbfc;
+}
+
+.point-editor-section {
+  margin-bottom: 20px;
+  padding: 22px 24px 8px;
+  background: #fff;
+  border: 1px solid #eef0f4;
+  border-radius: 10px;
+}
+
+.point-editor-section-head {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.point-editor-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #141414;
+  line-height: 22px;
+}
+
+.point-editor-section-desc {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #8c8c8c;
+  line-height: 20px;
+}

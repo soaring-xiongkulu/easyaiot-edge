@@ -20,11 +20,24 @@ export interface SnapSpace {
   space_code: string;
   bucket_name: string;
   save_mode: number; // 0:标准存储, 1:归档存储
-  save_time: number; // 0:永久保存, >=7(单位:天)
+  save_time: number; // 0:永久保存, >=1(单位:小时)
+  save_time_custom?: boolean;
+  directory_save_time?: number;
+  directory_id?: number;
+  effective_save_time?: number;
+  group_save_time?: number;
+  group_type?: 'nvr' | 'gb28181';
+  group_key?: string;
+  device_id?: string;
   description?: string;
   task_count?: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface SpaceBreadcrumbItem {
+  key: string;
+  name: string;
 }
 
 export interface SnapSpaceListResponse {
@@ -32,6 +45,9 @@ export interface SnapSpaceListResponse {
   msg: string;
   data: SnapSpace[];
   total: number;
+  parent_key?: string;
+  breadcrumbs?: SpaceBreadcrumbItem[];
+  is_search?: boolean;
 }
 
 /**
@@ -41,6 +57,9 @@ export const getSnapSpaceList = (params: {
   pageNo?: number;
   pageSize?: number;
   search?: string;
+  parentKey?: string;
+  /** leaves：返回全部叶子空间（下拉选择等场景） */
+  scope?: 'leaves';
 }) => {
   return commonApi('get', `${SNAP_PREFIX}/space/list`, params);
 };
@@ -78,9 +97,21 @@ export const updateSnapSpace = (space_id: number, data: {
   space_name?: string;
   save_mode?: number;
   save_time?: number;
+  save_time_custom?: boolean;
   description?: string;
 }) => {
   return commonApi('put', `${SNAP_PREFIX}/space/${space_id}`, data);
+};
+
+/**
+ * 更新 NVR / GB28181 分组默认抓拍保存时间
+ */
+export const updateSnapSpaceGroupPolicy = (data: {
+  group_type: 'nvr' | 'gb28181';
+  group_key: string;
+  save_time: number;
+}) => {
+  return commonApi('put', `${SNAP_PREFIX}/space/group-policy`, data);
 };
 
 /**
@@ -108,6 +139,13 @@ export interface SnapTask {
   algorithm_threshold?: number;
   algorithm_night_mode: boolean;
   alarm_enabled: boolean;
+  alarm_type: number; // 0:短信告警, 1:邮箱告警, 2:短信+邮箱
+  phone_number?: string;
+  email?: string;
+  notify_users?: Array<{ id?: number; name?: string; phone?: string; email?: string }> | string; // 通知人列表
+  notify_methods?: string; // 通知方式，多个用逗号分割
+  alarm_suppress_time?: number; // 告警通知抑制时间（秒）
+  last_notify_time?: string; // 最后通知时间
   auto_filename: boolean;
   custom_filename_prefix?: string;
   status: number; // 0:正常, 1:异常
@@ -168,6 +206,12 @@ export const createSnapTask = (data: {
   algorithm_threshold?: number;
   algorithm_night_mode?: boolean;
   alarm_enabled?: boolean;
+  alarm_type?: number;
+  phone_number?: string;
+  email?: string;
+  notify_users?: Array<{ id?: number; name?: string; phone?: string; email?: string }> | string;
+  notify_methods?: string;
+  alarm_suppress_time?: number;
   auto_filename?: boolean;
   custom_filename_prefix?: string;
 }) => {
@@ -190,6 +234,12 @@ export const updateSnapTask = (task_id: number, data: {
   algorithm_threshold?: number;
   algorithm_night_mode?: boolean;
   alarm_enabled?: boolean;
+  alarm_type?: number;
+  phone_number?: string;
+  email?: string;
+  notify_users?: Array<{ id?: number; name?: string; phone?: string; email?: string }> | string;
+  notify_methods?: string;
+  alarm_suppress_time?: number;
   auto_filename?: boolean;
   custom_filename_prefix?: string;
   is_enabled?: boolean;
@@ -235,6 +285,13 @@ export const getSnapTaskLogs = (task_id: number, params: {
 }) => {
   return commonApi('get', `${SNAP_PREFIX}/task/${task_id}/logs`, params);
 };
+
+export interface SnapTaskLogsResponse {
+  code: number;
+  msg: string;
+  data: SnapTaskLogItem[];
+  total: number;
+}
 
 // ====================== 检测区域管理接口 ======================
 export interface DetectionRegion {
@@ -508,14 +565,27 @@ export const cleanupDeviceStorage = (device_id: string) => {
 };
 
 // ====================== 抓拍图片管理接口 ======================
+export type SnapImageSource = 'snap' | 'frame' | 'algorithm';
+
 export interface SnapImage {
+  id?: number;
   object_name: string;
   filename: string;
   size: number;
   last_modified: string;
+  captured_at?: string;
+  source?: SnapImageSource;
+  task_id?: number | null;
   etag: string;
   content_type: string;
   url: string;
+}
+
+export interface SnapTaskLogItem {
+  time: string;
+  level: string;
+  message: string;
+  file?: string;
 }
 
 export interface SnapImageListResponse {
@@ -532,8 +602,14 @@ export const getSnapImageList = (space_id: number, params: {
   device_id?: string;
   pageNo?: number;
   pageSize?: number;
+  search?: string;
+  source?: SnapImageSource | '';
+  startTime?: string;
+  endTime?: string;
 }) => {
-  return commonApi('get', `${SNAP_PREFIX}/space/${space_id}/images`, params);
+  const payload = { ...params };
+  if (payload.source === '') delete payload.source;
+  return commonApi('get', `${SNAP_PREFIX}/space/${space_id}/images`, payload);
 };
 
 /**
@@ -545,15 +621,9 @@ export const deleteSnapImages = (space_id: number, object_names: string[]) => {
 
 /**
  * 清理过期的抓拍图片
+ * @param save_time_hours 保留时长（小时）
  */
-export const cleanupSnapImages = (space_id: number, days: number) => {
-  return commonApi('post', `${SNAP_PREFIX}/space/${space_id}/images/cleanup`, { days });
-};
-
-/**
- * 同步所有抓拍空间到Minio
- */
-export const syncSnapSpacesToMinio = () => {
-  return commonApi('post', `${SNAP_PREFIX}/space/sync/minio`);
+export const cleanupSnapImages = (space_id: number, save_time_hours: number) => {
+  return commonApi('post', `${SNAP_PREFIX}/space/${space_id}/images/cleanup`, { save_time_hours });
 };
 
