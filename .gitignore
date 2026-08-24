@@ -82,3 +82,6 @@ WEB/conf/_app.config.js
 /deploy/srs_data/*
 !/deploy/srs_data/conf/
 !/deploy/srs_data/conf/**
+# WEB 预构建产物（部署时由 CI/脚本生成）
+/WEB/dist-prebuilt/
+/WEB/dist-prebuilt-edge/
