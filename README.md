@@ -65,21 +65,6 @@ The platform continues the cloud-edge-device integration concept of the main pro
 | **Intelligent linked alarm** | Triple filtering of detection area + arming schedule + event type, significantly reducing false alarms |
 | **Alarm recording and playback** | Alarm-triggered automatic recording, supports timeline playback and variable speed playback |
 
-## 🔌 IoT Edge Acquisition Capabilities
-
-The platform uses **Node-RED** as the **IoT acquisition and protocol gateway** at the edge: on all-in-one machines or field gateways, visual flows connect complex industrial devices such as PLC, Modbus, OPC UA to complete acquisition, cleaning, and standardized reporting, forming a multi-source data closed-loop with DEVICE thing models, rule engines, and upstream AI/alarming.
-
-| Feature | Description |
-|---------|-------------|
-| **Visual low-code orchestration** | Drag, drop and wire nodes to build acquisition and forwarding logic, aligned with the habits of electrical and process engineers, significantly reducing hard coding and on-site customization cycles |
-| **Industrial multi-protocol and complex addressing** | Covers typical field protocols such as PLC, Modbus (RTU/TCP), OPC UA, serial/Ethernet, supports registers, tags, node addresses and other common industrial control models |
-| **Edge proximity processing** | Perform parsing, buffering, and lightweight computation at the edge, reducing upstream bandwidth and cloud dependency; local acquisition and basic closed-loop can be maintained even in weak or private networks |
-| **Polling and event dual mode** | Cyclic polling and change/alarm triggering can coexist, accommodating both steady-state conditions and sudden anomalies, in line with SCADA/industrial control usage habits |
-| **Cleaning and thing model alignment** | Use Function, JSON, template nodes to complete unit conversion, invalid value filtering, and field mapping, outputting data that meets the platform's thing model and upstream specifications |
-| **Ecosystem expansion and private protocols** | Rely on community nodes and self-developed nodes to quickly supplement vendor protocols or third-party gateways, avoiding the repetitive investment of "changing a backend for every type of device" |
-| **Platform business linkage** | Connect to the DEVICE module via MQTT, HTTP, etc., data enters the rule engine and alarm chain, and can be linked with video and AI detection tasks for multi-source linkage and policy orchestration |
-| **Operable and traceable** | Flow supports import/export and version retention, built-in debugging and message tracking, facilitating troubleshooting, auditing, and multi-site configuration replication |
-
 ## 💡 Technical Philosophy
 
 We adhere to a **Java + Python + C++** multi-language hybrid architecture, leveraging the strengths of each:
