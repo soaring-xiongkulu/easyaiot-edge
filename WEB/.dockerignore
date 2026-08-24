@@ -1,9 +1,16 @@
 # 依赖目录
 node_modules
 .pnpm-store
+.build-cache
+docker-build-logs
 
 # 构建产物（构建阶段不需要，生产阶段会从构建阶段复制）
 dist
+# dist-prebuilt-full/mini/standard 是本机提取的缓存目录（排除）；
+# dist-prebuilt/ 是跨架构构建时 runtime_image.sh 复制进来的目录（必须保留，不能排除）
+dist-prebuilt-full
+dist-prebuilt-mini
+dist-prebuilt-standard
 
 # 压缩文件
 dist.zip
@@ -25,8 +32,7 @@ logs
 *.swo
 *~
 
-# 锁定文件（不使用锁定文件，让容器内重新生成）
-pnpm-lock.yaml
+# 锁定文件需打进镜像，供 pnpm install --frozen-lockfile 复现依赖（勿排除）
 
 # Git相关
 .git

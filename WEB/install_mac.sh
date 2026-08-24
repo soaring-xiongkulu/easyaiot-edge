@@ -31,6 +31,9 @@ NC='\033[0m' # No Color
 # 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+EASYAIOT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../.scripts/docker/module_update_helpers.sh
+source "${EASYAIOT_ROOT}/.scripts/docker/module_update_helpers.sh"
 
 # 打印带颜色的消息
 print_info() {
@@ -464,8 +467,12 @@ install_service() {
     docker rm -f web-service 2>/dev/null || true
     $COMPOSE_CMD down --remove-orphans 2>/dev/null || true
     
-    print_info "构建 Docker 镜像..."
-    $COMPOSE_CMD build
+    if [ "${EASYAIOT_SKIP_BUILD:-0}" = "1" ] && docker image inspect web-service:latest >/dev/null 2>&1; then
+        print_success "镜像已从远程拉取 (web-service:latest)，跳过构建"
+    else
+        print_info "构建 Docker 镜像..."
+        $COMPOSE_CMD build
+    fi
     
     print_info "启动服务..."
     $COMPOSE_CMD up -d
@@ -482,8 +489,8 @@ install_service() {
         WEB_PORT=$(grep "^WEB_PORT=" .env 2>/dev/null | cut -d '=' -f2 | tr -d ' ' | tr -d '"' | tr -d "'")
     fi
     WEB_PORT=${WEB_PORT:-8888}
-    print_info "服务访问地址: http://localhost:${WEB_PORT}"
-    print_info "健康检查地址: http://localhost:${WEB_PORT}/health"
+    print_info "服务访问地址: https://localhost:${WEB_PORT}  （仅 HTTPS+HTTP/2，首次需信任自签证书）"
+    print_info "健康检查地址: https://localhost:${WEB_PORT}/health"
     print_info "查看日志: ./install_mac.sh logs"
 }
 
@@ -613,10 +620,17 @@ update_service() {
     check_macos
     check_docker
     check_docker_compose
-    
+
+    if easyaiot_update_should_recreate_only web-service:latest; then
+        $COMPOSE_CMD up -d --force-recreate --remove-orphans
+        print_success "服务更新完成"
+        check_status
+        return 0
+    fi
+
     print_info "拉取最新代码..."
-    git pull || print_warning "Git pull 失败，继续使用当前代码"
-    
+    easyaiot_git_pull_ff_only
+
     # 注意：前端构建现在在Docker容器内完成，重新构建镜像时会自动完成
     print_info "重新构建镜像（前端构建将在容器内自动完成）..."
     $COMPOSE_CMD build

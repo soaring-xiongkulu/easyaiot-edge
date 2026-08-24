@@ -5,7 +5,7 @@ dist
 .cache
 dist
 dist.zip
-pnpm-lock.yaml
+# pnpm-lock.yaml 须纳入版本库：Dockerfile COPY + --frozen-lockfile 依赖此文件
 
 tests/server/static
 tests/server/static/upload
@@ -16,6 +16,15 @@ tests/server/static/upload
 .env.*.local
 .eslintcache
 
+# HTTP/2 开发自签证书（pnpm certs:dev / pnpm dev:http2）
+certs/
+!certs/README.md
+# Docker nginx HTTPS 证书（install 自动生成）
+conf/ssl/*.crt
+conf/ssl/*.key
+conf/ssl/*.pem
+!conf/ssl/.gitkeep
+
 # Log files
 npm-debug.log*
 yarn-debug.log*
@@ -23,6 +32,10 @@ yarn-error.log*
 pnpm-debug.log*
 logs/*
 !logs/.gitkeep
+
+# install_linux.sh 将 docker build 完整输出 tee 到此目录（无需 BuildKit）
+docker-build-logs/*
+!docker-build-logs/.gitkeep
 
 # Editor directories and files
 .idea

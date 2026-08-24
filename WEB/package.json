@@ -1,7 +1,7 @@
 {
-  "name": "边缘智能算法应用平台",
+  "name": "云边端一体化智能算法应用平台",
   "version": "2.1.0-snapshot",
-  "packageManager": "pnpm@9.0.4",
+  "packageManager": "pnpm@11.3.0",
   "author": {
     "name": "basiclab",
     "email": "basiclab@qq.com",
@@ -18,13 +18,15 @@
   },
   "engines": {
     "node": "^18.0.0 || >=20.0.0",
-    "pnpm": ">=9.0.4"
+    "pnpm": ">=11.3.0"
   },
   "scripts": {
     "commit": "czg",
     "bootstrap": "pnpm install",
-    "serve": "pnpm dev",
+    "serve": "pnpm dev:http2",
     "dev": "vite",
+    "dev:http2": "node ./scripts/dev-http2.mjs",
+    "certs:dev": "node ./scripts/gen-dev-certs.mjs",
     "front": "vite --mode front",
     "build": "cross-env NODE_ENV=production NODE_OPTIONS=--max-old-space-size=8192 vite build && esno ./build/script/postBuild.ts",
     "build:test": "cross-env NODE_OPTIONS=--max-old-space-size=8192 vite build --mode test && esno ./build/script/postBuild.ts",
@@ -88,6 +90,7 @@
     "moment": "^2.30.1",
     "nprogress": "^0.2.0",
     "nvm": "^0.0.4",
+    "ol": "^7.4.0",
     "path-to-regexp": "^6.2.1",
     "pinia": "^2.1.7",
     "pinia-plugin-persistedstate": "^3.2.0",
