@@ -169,9 +169,11 @@ class StreamForwardDaemon:
             
             # 环境变量
             env = os.environ.copy()
-            # 重要：设置 PYTHONUNBUFFERED，确保输出实时（与 algorithm_task_daemon 保持一致）
             env['PYTHONUNBUFFERED'] = '1'
             env['TASK_ID'] = str(self._task_id)
+            video_env = os.getenv('VIDEO_ENV', '').strip()
+            if video_env:
+                env['VIDEO_ENV'] = video_env
             
             # 设置VIDEO服务API地址（用于心跳上报）
             video_service_port = os.getenv('FLASK_RUN_PORT', '6000')

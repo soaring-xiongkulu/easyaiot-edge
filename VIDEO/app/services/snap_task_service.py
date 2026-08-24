@@ -14,12 +14,14 @@ from apscheduler.triggers.cron import CronTrigger
 from models import db, SnapTask, SnapSpace, Device
 from app.services.snap_space_service import get_minio_client, create_camera_folder
 from app.services.camera_service import get_snapshot_uri
+from app.utils.cron_utils import validate_snap_cron_min_interval
 
 logger = logging.getLogger(__name__)
 
 # 全局任务调度器
 _scheduler = None
 _running_tasks = {}  # 存储运行中的任务ID
+_snap_scheduler_stopped = False
 
 
 def get_scheduler():
@@ -32,12 +34,26 @@ def get_scheduler():
     return _scheduler
 
 
+def shutdown_snap_scheduler(wait: bool = True) -> None:
+    """安全关闭抓拍任务调度器（幂等）。"""
+    global _scheduler, _snap_scheduler_stopped
+    if _snap_scheduler_stopped:
+        return
+    _snap_scheduler_stopped = True
+    if _scheduler is not None and _scheduler.running:
+        try:
+            _scheduler.shutdown(wait=wait)
+        except Exception as exc:
+            logger.debug('关闭抓拍任务调度器失败: %s', exc)
+
+
 def create_snap_task(
     task_name, space_id, device_id,
     capture_type=0, cron_expression="0 */5 * * * *", frame_skip=1,
     algorithm_enabled=False, algorithm_type=None, algorithm_model_id=None,
     algorithm_threshold=None, algorithm_night_mode=False,
-    alarm_enabled=False,
+    alarm_enabled=False, alarm_type=0, phone_number=None, email=None,
+    notify_users=None, notify_methods=None, alarm_suppress_time=300,
     auto_filename=True, custom_filename_prefix=None
 ):
     """创建抓拍任务"""
@@ -45,9 +61,19 @@ def create_snap_task(
         # 验证空间和设备存在
         space = SnapSpace.query.get_or_404(space_id)
         device = Device.query.get_or_404(device_id)
+        cron_expression = validate_snap_cron_min_interval(cron_expression)
         
         # 生成唯一编号
         task_code = f"TASK_{uuid.uuid4().hex[:8].upper()}"
+        
+        # 处理通知人列表（如果是字典则转换为JSON字符串）
+        import json
+        notify_users_json = None
+        if notify_users:
+            if isinstance(notify_users, (dict, list)):
+                notify_users_json = json.dumps(notify_users, ensure_ascii=False)
+            else:
+                notify_users_json = notify_users
         
         # 创建任务记录
         snap_task = SnapTask(
@@ -64,6 +90,12 @@ def create_snap_task(
             algorithm_threshold=algorithm_threshold,
             algorithm_night_mode=algorithm_night_mode,
             alarm_enabled=alarm_enabled,
+            alarm_type=alarm_type,
+            phone_number=phone_number,
+            email=email,
+            notify_users=notify_users_json,
+            notify_methods=notify_methods,
+            alarm_suppress_time=alarm_suppress_time,
             auto_filename=auto_filename,
             custom_filename_prefix=custom_filename_prefix,
             is_enabled=True,
@@ -99,14 +131,31 @@ def update_snap_task(task_id, **kwargs):
             'task_name', 'space_id', 'device_id', 'capture_type',
             'cron_expression', 'frame_skip', 'algorithm_enabled',
             'algorithm_type', 'algorithm_model_id', 'algorithm_threshold',
-            'algorithm_night_mode', 'alarm_enabled',
-            'auto_filename', 'custom_filename_prefix',
-            'is_enabled',
+            'algorithm_night_mode', 'alarm_enabled', 'alarm_type',
+            'phone_number', 'email', 'auto_filename', 'custom_filename_prefix',
+            'is_enabled', 'notify_methods', 'alarm_suppress_time'
         ]
         
+        if 'cron_expression' in kwargs and kwargs['cron_expression']:
+            kwargs['cron_expression'] = validate_snap_cron_min_interval(
+                kwargs['cron_expression']
+            )
+
         for field in updatable_fields:
             if field in kwargs:
                 setattr(task, field, kwargs[field])
+        
+        # 处理通知人列表
+        if 'notify_users' in kwargs:
+            import json
+            notify_users = kwargs['notify_users']
+            if notify_users:
+                if isinstance(notify_users, (dict, list)):
+                    task.notify_users = json.dumps(notify_users, ensure_ascii=False)
+                else:
+                    task.notify_users = notify_users
+            else:
+                task.notify_users = None
         
         db.session.commit()
         
@@ -407,6 +456,7 @@ def send_alert_for_detection(task, region, detection_result, frame, device):
         device: 设备对象
     """
     try:
+        from app.services.notification_service import send_alert_notification
         from app.services.alert_service import create_alert
         from datetime import datetime
         import cv2
@@ -434,6 +484,9 @@ def send_alert_for_detection(task, region, detection_result, frame, device):
             alert_data['record_path'] = alert_record.get('record_path')
         except Exception as e:
             logger.warning(f"创建告警记录失败: {str(e)}")
+        
+        # 发送通知
+        send_alert_notification(task, alert_data)
         
     except Exception as e:
         logger.error(f"发送检测告警失败: {str(e)}", exc_info=True)
@@ -512,12 +565,10 @@ def capture_image(task, device, space):
                     logger.error(f"设备 {device.id} RTMP流抽帧异常: {str(e)}", exc_info=True)
                     return False
             else:
-                # 从RTSP流中抽帧（使用OpenCV）
-                cap = cv2.VideoCapture(source)
-                ret, frame = cap.read()
-                cap.release()
-                
-                if not ret:
+                # 从RTSP流中抽帧（跳过缓冲旧帧与灰屏）
+                from app.utils.rtsp_stream_utils import capture_rtsp_frame
+                ret, frame = capture_rtsp_frame(source)
+                if not ret or frame is None:
                     logger.error(f"设备 {device.id} RTSP流读取失败")
                     return False
         else:  # 抓拍（使用ONVIF快照）
@@ -658,7 +709,21 @@ def capture_image(task, device, space):
             len(image_bytes),
             content_type="image/jpeg"
         )
-        
+
+        try:
+            from app.services.space_file_metadata_service import upsert_snap_image
+            upsert_snap_image(
+                space_id=space.id,
+                device_id=device.id,
+                object_name=object_name,
+                bucket_name=bucket_name,
+                file_size=len(image_bytes),
+                task_id=task.id,
+                source='snap',
+            )
+        except Exception as meta_err:
+            logger.error(f"写入抓拍元数据失败: device_id={device.id}, error={meta_err}")
+
         logger.info(f"抓拍成功: {bucket_name}/{object_name}")
         return True
         

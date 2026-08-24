@@ -8,26 +8,45 @@ import io
 import logging
 import uuid
 from flask import current_app
-
-from app.services.local_bucket_client import LocalBucketClient, StorageObjectError
+from minio import Minio
+from minio.error import S3Error
+from sqlalchemy.exc import IntegrityError
 
 from models import db, SnapSpace, SnapTask
+from app.utils.service_urls import minio_storage_enabled
 
 logger = logging.getLogger(__name__)
 
 
 def get_minio_client():
-    """创建并返回本地存储客户端（兼容原 MinIO API）"""
-    return LocalBucketClient()
+    """创建并返回Minio客户端"""
+    minio_endpoint = current_app.config.get('MINIO_ENDPOINT', 'localhost:9000')
+    access_key = current_app.config.get('MINIO_ACCESS_KEY', 'minioadmin')
+    secret_key = current_app.config.get('MINIO_SECRET_KEY', 'minioadmin')
+    secure_value = current_app.config.get('MINIO_SECURE', False)
+    # 处理 secure 可能是布尔值或字符串的情况
+    if isinstance(secure_value, bool):
+        secure = secure_value
+    else:
+        secure = str(secure_value).lower() == 'true'
+    return Minio(minio_endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
 
 
-def create_snap_space(space_name, save_mode=0, save_time=0, description=None, device_id=None):
+def _find_snap_space_by_device_id(device_id):
+    """按 device_id 查询抓拍空间（刷新会话，避免脏缓存）。"""
+    if not device_id:
+        return None
+    db.session.expire_all()
+    return SnapSpace.query.filter_by(device_id=device_id).first()
+
+
+def create_snap_space(space_name, save_mode=0, save_time=1, description=None, device_id=None, save_time_custom=False):
     """创建抓拍空间
     
     Args:
         space_name: 空间名称
         save_mode: 存储模式 0:标准存储, 1:归档存储
-        save_time: 保存时间 0:永久保存, >=7:保存天数
+        save_time: 保存时长 0:永久保存, >=1:小时
         description: 描述
         device_id: 设备ID（可选，如果提供则检查该设备文件夹是否已存在）
     """
@@ -35,11 +54,12 @@ def create_snap_space(space_name, save_mode=0, save_time=0, description=None, de
         # 刷新数据库会话，确保获取最新数据（避免缓存问题）
         db.session.expire_all()
         
-        # 如果提供了设备ID，检查该设备是否已有抓拍空间
+        # 如果提供了设备ID，检查该设备是否已有抓拍空间（幂等：已存在则直接返回）
         if device_id:
-            existing_space = SnapSpace.query.filter_by(device_id=device_id).first()
+            existing_space = _find_snap_space_by_device_id(device_id)
             if existing_space:
-                raise ValueError(f"设备 '{device_id}' 已有关联的抓拍空间，不能重复创建")
+                logger.info(f"设备 '{device_id}' 已有关联的抓拍空间，返回现有空间")
+                return existing_space
         
         # 注意：允许同名空间，因为通过space_code来保证唯一性
         
@@ -47,6 +67,25 @@ def create_snap_space(space_name, save_mode=0, save_time=0, description=None, de
         space_code = f"SPACE_{uuid.uuid4().hex[:8].upper()}"
         # 统一使用 snap-space bucket
         bucket_name = "snap-space"
+
+        if not minio_storage_enabled():
+            snap_space = SnapSpace(
+                space_name=space_name,
+                space_code=space_code,
+                bucket_name=bucket_name,
+                save_mode=save_mode,
+                save_time=save_time,
+                save_time_custom=save_time_custom,
+                description=description,
+                device_id=device_id
+            )
+            db.session.add(snap_space)
+            db.session.commit()
+            logger.info(
+                "mini 形态抓拍空间创建成功（仅数据库）: %s (%s)，设备ID: %s",
+                space_name, space_code, device_id,
+            )
+            return snap_space
         
         # 确保 snap-space bucket 存在
         minio_client = get_minio_client()
@@ -67,21 +106,9 @@ def create_snap_space(space_name, save_mode=0, save_time=0, description=None, de
                         has_files = True
                         break
                 if has_files:
-                    raise ValueError(f"设备 '{device_id}' 已存在文件，不能重复创建")
-        
-        # 如果提供了设备ID，检查该设备在snap-space仓库下是否已有文件夹
-        if device_id:
-            # 检查是否存在该设备的文件夹（有实际文件）
-            device_folder = f"{device_id}/"
-            objects = list(minio_client.list_objects(bucket_name, prefix=device_folder, recursive=True))
-            # 检查是否有实际文件（不是空文件夹）
-            has_files = False
-            for obj in objects:
-                if not obj.object_name.endswith('/'):  # 不是文件夹标记
-                    has_files = True
-                    break
-            if has_files:
-                raise ValueError(f"设备 '{device_id}' 已存在文件夹，不能重复创建")
+                    logger.warning(
+                        f"设备 '{device_id}' 在 MinIO 中已有抓拍文件，将继续确保数据库抓拍空间记录存在"
+                    )
         
         # 创建数据库记录
         snap_space = SnapSpace(
@@ -90,6 +117,7 @@ def create_snap_space(space_name, save_mode=0, save_time=0, description=None, de
             bucket_name=bucket_name,
             save_mode=save_mode,
             save_time=save_time,
+            save_time_custom=save_time_custom,
             description=description,
             device_id=device_id
         )
@@ -108,20 +136,30 @@ def create_snap_space(space_name, save_mode=0, save_time=0, description=None, de
                     0
                 )
                 logger.info(f"创建MinIO设备目录: {bucket_name}/{device_folder}")
-            except StorageObjectError as e:
-                logger.warning(
-                    f"创建设备目录标记失败: {bucket_name}/{device_folder}, 错误: {str(e)}"
-                )
+            except S3Error as e:
+                # 如果创建目录标记失败，记录警告但不影响整体流程（因为MinIO使用前缀即可）
+                logger.warning(f"创建MinIO设备目录标记失败: {bucket_name}/{device_folder}, 错误: {str(e)}")
         
         logger.info(f"抓拍空间创建成功: {space_name} ({space_code})，bucket: {bucket_name}，设备ID: {device_id}")
         return snap_space
+    except IntegrityError as e:
+        db.session.rollback()
+        if device_id and 'device_id' in str(getattr(e, 'orig', e)):
+            existing_space = _find_snap_space_by_device_id(device_id)
+            if existing_space:
+                logger.info(
+                    f"设备 '{device_id}' 抓拍空间已存在（并发创建），返回现有空间"
+                )
+                return existing_space
+        logger.error(f"创建抓拍空间失败（唯一约束冲突）: {str(e)}", exc_info=True)
+        raise RuntimeError(f"创建抓拍空间失败: {str(e)}")
     except ValueError:
         db.session.rollback()
         raise
-    except StorageObjectError as e:
+    except S3Error as e:
         db.session.rollback()
-        logger.error(f"本地存储操作失败: {str(e)}")
-        raise RuntimeError(f"创建存储目录失败: {str(e)}")
+        logger.error(f"MinIO操作失败: {str(e)}")
+        raise RuntimeError(f"创建MinIO存储桶失败: {str(e)}")
     except Exception as e:
         db.session.rollback()
         logger.error(f"创建抓拍空间失败: {str(e)}", exc_info=True)
@@ -147,7 +185,7 @@ def create_snap_space_for_device(device_id, device_name=None):
             raise ValueError(f"设备 '{device_id}' 不存在")
         
         # 检查该设备是否已有抓拍空间
-        existing_space = SnapSpace.query.filter_by(device_id=device_id).first()
+        existing_space = _find_snap_space_by_device_id(device_id)
         if existing_space:
             logger.info(f"设备 '{device_id}' 已有关联的抓拍空间，返回现有空间")
             return existing_space
@@ -155,11 +193,13 @@ def create_snap_space_for_device(device_id, device_name=None):
         # 生成空间名称：直接使用设备名称（允许同名，因为通过space_code唯一）
         space_name = device_name or device.name or device_id
         
-        # 使用默认配置创建抓拍空间
+        from app.services.space_save_time_service import resolve_save_time_for_device, SPACE_KIND_SNAP
+        directory_save_time = resolve_save_time_for_device(device_id, SPACE_KIND_SNAP)
         return create_snap_space(
             space_name=space_name,
-            save_mode=0,  # 默认标准存储
-            save_time=0,  # 默认永久保存
+            save_mode=0,
+            save_time=directory_save_time,
+            save_time_custom=False,
             description=f"设备 {device_id} 的自动创建抓拍空间",
             device_id=device_id
         )
@@ -186,9 +226,10 @@ def get_snap_space_by_device_id(device_id):
         return None
 
 
-def update_snap_space(space_id, space_name=None, save_mode=None, save_time=None, description=None):
+def update_snap_space(space_id, space_name=None, save_mode=None, save_time=None, description=None, save_time_custom=None):
     """更新抓拍空间"""
     try:
+        from app.services.space_save_time_service import apply_space_save_time_update, SPACE_KIND_SNAP
         snap_space = SnapSpace.query.get_or_404(space_id)
         
         # 允许同名空间，因为通过space_code来保证唯一性
@@ -196,14 +237,20 @@ def update_snap_space(space_id, space_name=None, save_mode=None, save_time=None,
             snap_space.space_name = space_name
         if save_mode is not None:
             snap_space.save_mode = save_mode
-        if save_time is not None:
-            snap_space.save_time = save_time
+        if save_time is not None or save_time_custom is not None:
+            apply_space_save_time_update(
+                snap_space, SPACE_KIND_SNAP,
+                save_time=save_time, save_time_custom=save_time_custom,
+            )
         if description is not None:
             snap_space.description = description
         
         db.session.commit()
         logger.info(f"抓拍空间更新成功: ID={space_id}")
         return snap_space
+    except ValueError:
+        db.session.rollback()
+        raise
     except Exception as e:
         db.session.rollback()
         logger.error(f"更新抓拍空间失败: {str(e)}", exc_info=True)
@@ -211,31 +258,10 @@ def update_snap_space(space_id, space_name=None, save_mode=None, save_time=None,
 
 
 def check_space_has_images(space_id):
-    """检查抓拍空间是否有抓拍图片"""
+    """检查抓拍空间是否有抓拍图片（查数据库）"""
     try:
-        snap_space = SnapSpace.query.get_or_404(space_id)
-        bucket_name = snap_space.bucket_name
-        
-        minio_client = get_minio_client()
-        if not minio_client.bucket_exists(bucket_name):
-            return False, 0
-        
-        # 统计该空间下的所有文件（排除文件夹标记）
-        # 如果空间关联了设备，检查 device_id/ 前缀下的文件
-        # 如果空间没有关联设备，检查整个bucket下的文件
-        file_count = 0
-        if snap_space.device_id:
-            # 只检查该设备文件夹下的文件
-            device_prefix = f"{snap_space.device_id}/"
-            objects = minio_client.list_objects(bucket_name, prefix=device_prefix, recursive=True)
-        else:
-            # 空间没有关联设备，检查整个bucket下的文件
-            objects = minio_client.list_objects(bucket_name, prefix="", recursive=True)
-        
-        for obj in objects:
-            if not obj.object_name.endswith('/'):  # 不是文件夹标记
-                file_count += 1
-        
+        from app.services.space_file_metadata_service import count_snap_images
+        file_count = count_snap_images(space_id)
         return file_count > 0, file_count
     except Exception as e:
         logger.error(f"检查抓拍空间图片失败: {str(e)}", exc_info=True)
@@ -283,24 +309,25 @@ def delete_snap_space(space_id):
         # 删除MinIO bucket中该空间文件夹下的所有对象
         # 注意：现在路径是 device_id/filename，不再使用 space_code 前缀
         # 如果空间关联了设备，只删除该设备的文件；否则删除所有文件
-        try:
-            minio_client = get_minio_client()
-            if minio_client.bucket_exists(bucket_name):
-                if snap_space.device_id:
-                    # 只删除该设备的文件
-                    device_prefix = f"{snap_space.device_id}/"
-                    objects = minio_client.list_objects(bucket_name, prefix=device_prefix, recursive=True)
-                    for obj in objects:
-                        minio_client.remove_object(bucket_name, obj.object_name)
-                    logger.info(f"删除MinIO设备文件夹: {bucket_name}/{device_prefix}")
-                else:
-                    # 空间没有关联设备，删除所有文件（这种情况应该很少见）
-                    objects = minio_client.list_objects(bucket_name, prefix="", recursive=True)
-                    for obj in objects:
-                        minio_client.remove_object(bucket_name, obj.object_name)
-                    logger.info(f"删除MinIO空间所有文件: {bucket_name}/")
-        except StorageObjectError as e:
-            logger.warning(f"删除抓拍空间文件失败（可能不存在）: {str(e)}")
+        if minio_storage_enabled():
+            try:
+                minio_client = get_minio_client()
+                if minio_client.bucket_exists(bucket_name):
+                    if snap_space.device_id:
+                        # 只删除该设备的文件
+                        device_prefix = f"{snap_space.device_id}/"
+                        objects = minio_client.list_objects(bucket_name, prefix=device_prefix, recursive=True)
+                        for obj in objects:
+                            minio_client.remove_object(bucket_name, obj.object_name)
+                        logger.info(f"删除MinIO设备文件夹: {bucket_name}/{device_prefix}")
+                    else:
+                        # 空间没有关联设备，删除所有文件（这种情况应该很少见）
+                        objects = minio_client.list_objects(bucket_name, prefix="", recursive=True)
+                        for obj in objects:
+                            minio_client.remove_object(bucket_name, obj.object_name)
+                        logger.info(f"删除MinIO空间所有文件: {bucket_name}/")
+            except S3Error as e:
+                logger.warning(f"删除MinIO空间文件夹失败（可能不存在）: {str(e)}")
         
         # 删除数据库记录
         db.session.delete(snap_space)
@@ -325,28 +352,20 @@ def get_snap_space(space_id):
         raise ValueError(f"抓拍空间不存在: ID={space_id}")
 
 
-def list_snap_spaces(page_no=1, page_size=10, search=None):
-    """查询抓拍空间列表"""
+def list_snap_spaces(page_no=1, page_size=10, search=None, parent_key=None, scope=None):
+    """查询抓拍空间列表（支持 NVR / GB28181 文件夹层级）。"""
     try:
-        query = SnapSpace.query
-        
-        if search:
-            query = query.filter(SnapSpace.space_name.ilike(f'%{search}%'))
-        
-        query = query.order_by(SnapSpace.created_at.desc())
-        
-        pagination = query.paginate(
-            page=page_no,
-            per_page=page_size,
-            error_out=False
+        from app.services.space_folder_tree_service import list_space_folder_nodes, SPACE_KIND_SNAP
+        return list_space_folder_nodes(
+            SPACE_KIND_SNAP,
+            page_no=page_no,
+            page_size=page_size,
+            search=search,
+            parent_key=parent_key,
+            scope=scope,
         )
-        
-        return {
-            'items': [space.to_dict() for space in pagination.items],
-            'total': pagination.total,
-            'page_no': page_no,
-            'page_size': page_size
-        }
+    except ValueError:
+        raise
     except Exception as e:
         logger.error(f"查询抓拍空间列表失败: {str(e)}", exc_info=True)
         raise RuntimeError(f"查询抓拍空间列表失败: {str(e)}")
@@ -356,6 +375,11 @@ def create_camera_folder(space_id, device_id):
     """为摄像头创建独立的文件夹（在MinIO bucket中）"""
     try:
         snap_space = SnapSpace.query.get_or_404(space_id)
+        folder_path = f"{device_id}/"
+        if not minio_storage_enabled():
+            logger.info(f"mini 形态跳过 MinIO 目录创建，返回逻辑路径: {folder_path}")
+            return folder_path
+
         bucket_name = snap_space.bucket_name
         space_code = snap_space.space_code
         
@@ -391,16 +415,25 @@ def create_camera_folder(space_id, device_id):
 def sync_spaces_to_minio():
     """同步所有抓拍空间到Minio，创建不存在的目录"""
     try:
+        spaces = SnapSpace.query.all()
+        total_spaces = len(spaces)
+        if not minio_storage_enabled():
+            logger.info('MinIO 未启用，跳过抓拍空间同步')
+            return {
+                'total_spaces': total_spaces,
+                'created_count': 0,
+                'skipped_count': total_spaces,
+                'error_count': 0,
+            }
+
         minio_client = get_minio_client()
         bucket_name = "snap-space"
-        
-        # 确保bucket存在
+
         if not minio_client.bucket_exists(bucket_name):
             minio_client.make_bucket(bucket_name)
             logger.info(f"创建MinIO bucket: {bucket_name}")
         
         # 获取所有抓拍空间
-        spaces = SnapSpace.query.all()
         total_spaces = len(spaces)
         created_count = 0
         skipped_count = 0
@@ -430,10 +463,9 @@ def sync_spaces_to_minio():
                             )
                             created_count += 1
                             logger.info(f"创建设备目录: {bucket_name}/{device_prefix} (空间: {space.space_name}, 设备: {space.device_id})")
-                        except StorageObjectError as e:
-                            logger.warning(
-                                f"创建设备目录失败: {bucket_name}/{device_prefix}, 错误: {str(e)}"
-                            )
+                        except S3Error as e:
+                            # 如果创建失败，记录错误但继续处理其他空间
+                            logger.warning(f"创建设备目录失败: {bucket_name}/{device_prefix}, 错误: {str(e)}")
                             error_count += 1
                     else:
                         skipped_count += 1
@@ -477,17 +509,23 @@ def auto_cleanup_all_spaces(app=None):
     with app.app_context():
         try:
             # 延迟导入，避免循环依赖
-            from app.services.snap_image_service import cleanup_old_images_by_days
+            from app.services.snap_image_service import cleanup_old_images_by_save_time
             
-            spaces = SnapSpace.query.filter(SnapSpace.save_time > 0).all()
+            from app.services.space_save_time_service import enrich_snap_space_dict
+
+            spaces = SnapSpace.query.all()
             total_processed = 0
             total_deleted = 0
             total_archived = 0
             total_errors = 0
             
             for space in spaces:
+                info = enrich_snap_space_dict({'save_time': space.save_time}, space)
+                save_time_hours = info.get('effective_save_time') or 0
+                if save_time_hours <= 0:
+                    continue
                 try:
-                    result = cleanup_old_images_by_days(space.id, space.save_time)
+                    result = cleanup_old_images_by_save_time(space.id, save_time_hours)
                     total_processed += result['processed_count']
                     total_deleted += result['deleted_count']
                     total_archived += result['archived_count']

@@ -26,7 +26,8 @@ from app.services.storage_service import (
     get_device_storage_info, check_and_cleanup_storage
 )
 from app.services.snap_image_service import (
-    list_snap_images, delete_snap_images, get_snap_image, cleanup_old_images_by_days
+    list_snap_images, delete_snap_images, get_snap_image, cleanup_old_images_by_save_time,
+    sync_snap_images_metadata,
 )
 
 snap_bp = Blueprint('snap', __name__)
@@ -41,13 +42,19 @@ def list_spaces():
         page_no = int(request.args.get('pageNo', 1))
         page_size = int(request.args.get('pageSize', 10))
         search = request.args.get('search', '').strip() or None
-        
-        result = list_snap_spaces(page_no, page_size, search)
+        parent_key = request.args.get('parentKey', 'root').strip() or 'root'
+        scope = request.args.get('scope', '').strip() or None
+
+        result = list_snap_spaces(page_no, page_size, search, parent_key, scope)
         return jsonify({
             'code': 0,
             'msg': 'success',
             'data': result['items'],
-            'total': result['total']
+            'total': result['total'],
+            'parent_key': result.get('parent_key', 'root'),
+            'breadcrumbs': result.get('breadcrumbs', []),
+            'is_search': result.get('is_search', False),
+            'scope': result.get('scope'),
         })
     except ValueError as e:
         return jsonify({'code': 400, 'msg': str(e)}), 400
@@ -113,9 +120,15 @@ def update_space(space_id):
         space_name = data.get('space_name', '').strip() if 'space_name' in data else None
         save_mode = data.get('save_mode') if 'save_mode' in data else None
         save_time = data.get('save_time') if 'save_time' in data else None
+        save_time_custom = data.get('save_time_custom') if 'save_time_custom' in data else None
         description = data.get('description', '').strip() if 'description' in data else None
         
-        space = update_snap_space(space_id, space_name, save_mode, save_time, description)
+        try:
+            space = update_snap_space(
+                space_id, space_name, save_mode, save_time, description, save_time_custom,
+            )
+        except ValueError as ve:
+            return jsonify({'code': 400, 'msg': str(ve)}), 400
         return jsonify({
             'code': 0,
             'msg': '抓拍空间更新成功',
@@ -125,6 +138,39 @@ def update_space(space_id):
         return jsonify({'code': 500, 'msg': str(e)}), 500
     except Exception as e:
         logger.error(f'更新抓拍空间失败: {str(e)}', exc_info=True)
+        db.session.rollback()
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
+
+
+@snap_bp.route('/space/group-policy', methods=['PUT'])
+def update_group_policy():
+    """更新 NVR / GB28181 分组默认抓拍保存时间，联动非自定义子设备。"""
+    try:
+        data = request.get_json() or {}
+        group_type = (data.get('group_type') or '').strip().lower()
+        group_key = str(data.get('group_key') or '').strip()
+        save_time = data.get('save_time')
+        if save_time is None:
+            return jsonify({'code': 400, 'msg': 'save_time 不能为空'}), 400
+
+        from app.services.space_group_save_time_service import update_group_save_time
+        from app.services.space_save_time_service import SPACE_KIND_SNAP
+
+        policy, updated = update_group_save_time(group_type, group_key, SPACE_KIND_SNAP, save_time)
+        return jsonify({
+            'code': 0,
+            'msg': f'分组存储策略已更新，已同步 {updated} 个非自定义设备空间',
+            'data': {
+                'group_type': policy.group_type,
+                'group_key': policy.group_key,
+                'save_time': policy.snap_save_time,
+                'updated_count': updated,
+            },
+        })
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'更新分组抓拍存储策略失败: {str(e)}', exc_info=True)
         db.session.rollback()
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
@@ -244,6 +290,12 @@ def create_task():
             algorithm_threshold=data.get('algorithm_threshold'),
             algorithm_night_mode=data.get('algorithm_night_mode', False),
             alarm_enabled=data.get('alarm_enabled', False),
+            alarm_type=data.get('alarm_type', 0),
+            phone_number=data.get('phone_number'),
+            email=data.get('email'),
+            notify_users=data.get('notify_users'),
+            notify_methods=data.get('notify_methods'),
+            alarm_suppress_time=data.get('alarm_suppress_time', 300),
             auto_filename=data.get('auto_filename', True),
             custom_filename_prefix=data.get('custom_filename_prefix')
         )
@@ -300,6 +352,18 @@ def update_task(task_id):
             update_data['algorithm_night_mode'] = data.get('algorithm_night_mode')
         if 'alarm_enabled' in data:
             update_data['alarm_enabled'] = data.get('alarm_enabled')
+        if 'alarm_type' in data:
+            update_data['alarm_type'] = data.get('alarm_type')
+        if 'phone_number' in data:
+            update_data['phone_number'] = data.get('phone_number')
+        if 'email' in data:
+            update_data['email'] = data.get('email')
+        if 'notify_users' in data:
+            update_data['notify_users'] = data.get('notify_users')
+        if 'notify_methods' in data:
+            update_data['notify_methods'] = data.get('notify_methods')
+        if 'alarm_suppress_time' in data:
+            update_data['alarm_suppress_time'] = data.get('alarm_suppress_time')
         if 'auto_filename' in data:
             update_data['auto_filename'] = data.get('auto_filename')
         if 'custom_filename_prefix' in data:
@@ -843,8 +907,29 @@ def list_space_images(space_id):
         device_id = request.args.get('device_id', '').strip() or None
         page_no = int(request.args.get('pageNo', 1))
         page_size = int(request.args.get('pageSize', 20))
-        
-        result = list_snap_images(space_id, device_id, page_no, page_size)
+        search = request.args.get('search', '').strip() or None
+        source = request.args.get('source', '').strip() or None
+        start_time = request.args.get('startTime')
+        end_time = request.args.get('endTime')
+
+        from datetime import datetime
+        from app.utils.service_urls import normalize_to_shanghai_naive
+
+        def _parse_dt(value):
+            if not value:
+                return None
+            text = str(value).strip()
+            if ' ' in text and 'T' not in text:
+                text = text.replace(' ', 'T', 1)
+            parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
+            if parsed.tzinfo is not None:
+                return normalize_to_shanghai_naive(parsed)
+            return parsed
+
+        start_dt = _parse_dt(start_time)
+        end_dt = _parse_dt(end_time)
+
+        result = list_snap_images(space_id, device_id, page_no, page_size, search, start_dt, end_dt, source)
         return jsonify({
             'code': 0,
             'msg': 'success',
@@ -901,17 +986,36 @@ def delete_space_images(space_id):
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
 
+@snap_bp.route('/space/<int:space_id>/images/sync', methods=['POST'])
+def sync_images_metadata(space_id):
+    """从 MinIO 同步抓拍元数据到数据库（历史数据回填）"""
+    try:
+        result = sync_snap_images_metadata(space_id)
+        return jsonify({
+            'code': 0,
+            'msg': '同步完成',
+            'data': result
+        })
+    except RuntimeError as e:
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+    except Exception as e:
+        logger.error(f'同步抓拍元数据失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
+
+
 @snap_bp.route('/space/<int:space_id>/images/cleanup', methods=['POST'])
 def cleanup_space_images(space_id):
     """清理过期的抓拍图片"""
     try:
         data = request.get_json() or {}
-        days = int(data.get('days', 0))
-        
-        if days <= 0:
-            return jsonify({'code': 400, 'msg': 'days必须大于0'}), 400
-        
-        result = cleanup_old_images_by_days(space_id, days)
+        if 'save_time_hours' not in data:
+            return jsonify({'code': 400, 'msg': '需要提供 save_time_hours 参数'}), 400
+        save_time_hours = int(data.get('save_time_hours', 0))
+
+        if save_time_hours <= 0:
+            return jsonify({'code': 400, 'msg': 'save_time_hours 必须大于 0'}), 400
+
+        result = cleanup_old_images_by_save_time(space_id, save_time_hours)
         return jsonify({
             'code': 0,
             'msg': '清理完成',

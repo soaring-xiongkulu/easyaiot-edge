@@ -5,9 +5,10 @@
 @wechat EasyAIoT2025
 """
 import logging
+import os
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from sqlalchemy.orm import joinedload
 from sqlalchemy import or_, and_
 
@@ -18,6 +19,87 @@ import json
 
 logger = logging.getLogger(__name__)
 
+_NVR_STREAM_FORWARD_MARKER_PREFIX = 'nvr_stream_forward:nvr_id:'
+
+
+def _is_nvr_stream_forward_task(task: StreamForwardTask) -> bool:
+    description = (task.description or '').strip()
+    return _NVR_STREAM_FORWARD_MARKER_PREFIX in description
+
+
+def _default_schedule_policy(device_count: int, *, is_nvr: bool = False) -> str:
+    """根据场景解析默认调度策略（单路始终本机）。"""
+    if device_count <= 1:
+        return 'local'
+    if is_nvr:
+        policy = os.getenv('STREAM_FORWARD_NVR_SCHEDULE_POLICY', 'auto').strip().lower()
+    else:
+        policy = os.getenv('STREAM_FORWARD_MULTI_DEVICE_SCHEDULE_POLICY', 'local').strip().lower()
+    return policy if policy in ('local', 'auto', 'node') else 'local'
+
+
+def _maybe_upgrade_nvr_schedule_policy(task: StreamForwardTask, device_count: int) -> bool:
+    """NVR 多路任务可将历史 local 策略升级为集群 auto（可配置关闭）。"""
+    if device_count <= 1 or not _is_nvr_stream_forward_task(task):
+        return False
+    upgrade = os.getenv('STREAM_FORWARD_NVR_UPGRADE_LOCAL', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+    if not upgrade:
+        return False
+    if (task.schedule_policy or 'local') != 'local':
+        return False
+    task.schedule_policy = _default_schedule_policy(device_count, is_nvr=True)
+    return True
+
+
+def _trigger_deploy_sync(task_id: int, *, full_restart: bool = False) -> None:
+    """任务运行中时同步部署：策略变更全量重启，设备变更增量重平衡。"""
+    from .stream_forward_launcher_service import (
+        rebalance_stream_forward_task,
+        restart_stream_forward_task_services,
+    )
+
+    task = StreamForwardTask.query.get(task_id)
+    if not task or not task.is_enabled:
+        return
+    try:
+        if full_restart:
+            if not restart_stream_forward_task_services(task_id):
+                raise RuntimeError('重启推流转发服务失败')
+        else:
+            if not rebalance_stream_forward_task(task_id):
+                raise RuntimeError('重平衡推流转发部署失败')
+    except Exception as e:
+        logger.warning('推流转发部署同步失败 task_id=%s: %s', task_id, e, exc_info=True)
+        raise
+
+
+def refresh_stream_forward_rtsp_for_devices(device_ids: Optional[List[str]]) -> None:
+    """算法任务启停后刷新推流转发 RTSP（主/子码流切换需 full_restart）。"""
+    ids = [d for d in (device_ids or []) if d]
+    if not ids:
+        return
+    from .stream_forward_launcher_service import restart_stream_forward_task_services
+
+    task_ids = set()
+    for device_id in ids:
+        tasks = StreamForwardTask.query.filter(
+            StreamForwardTask.is_enabled.is_(True),
+            StreamForwardTask.devices.any(Device.id == device_id),
+        ).all()
+        for task in tasks:
+            task_ids.add(task.id)
+    for task_id in task_ids:
+        try:
+            logger.info(
+                'refresh forward RTSP after algo change task_id=%s devices=%s',
+                task_id, ids,
+            )
+            restart_stream_forward_task_services(task_id)
+        except Exception as e:
+            logger.warning(
+                'refresh forward RTSP failed task_id=%s: %s', task_id, e, exc_info=True,
+            )
+
 
 def create_stream_forward_task(task_name: str,
                                device_ids: Optional[List[str]] = None,
@@ -25,9 +107,14 @@ def create_stream_forward_task(task_name: str,
                                output_quality: str = 'high',
                                output_bitrate: Optional[str] = None,
                                description: Optional[str] = None,
-                               is_enabled: bool = False) -> StreamForwardTask:
+                               is_enabled: bool = False,
+                               schedule_policy: str = 'local',
+                               prefer_gpu: bool = True,
+                               target_node_id: Optional[int] = None,
+                               executor: str = 'cpp') -> StreamForwardTask:
     """创建推流转发任务"""
     try:
+        from app.services.runtime_config_service import normalize_executor
         device_id_list = device_ids or []
         
         # 验证所有设备是否存在
@@ -49,7 +136,11 @@ def create_stream_forward_task(task_name: str,
             output_bitrate=output_bitrate,
             description=description,
             is_enabled=is_enabled,
-            total_streams=len(device_id_list)
+            total_streams=len(device_id_list),
+            schedule_policy=schedule_policy or 'local',
+            prefer_gpu=prefer_gpu if prefer_gpu is not None else True,
+            target_node_id=target_node_id,
+            executor=normalize_executor(executor),
         )
         
         db.session.add(task)
@@ -80,10 +171,16 @@ def create_stream_forward_task(task_name: str,
         raise
 
 
-def update_stream_forward_task(task_id: int, **kwargs) -> StreamForwardTask:
-    """更新推流转发任务"""
+def update_stream_forward_task(task_id: int, auto_rebalance: bool = True, **kwargs) -> Tuple[StreamForwardTask, Optional[str]]:
+    """更新推流转发任务，返回 (task, sync_action)。sync_action: rebalance | full_restart | None"""
     try:
         task = StreamForwardTask.query.get_or_404(task_id)
+        was_enabled = bool(task.is_enabled)
+        device_ids_changed = False
+        schedule_changed = False
+        previous_schedule = task.schedule_policy or 'local'
+        previous_target_node = task.target_node_id
+        previous_executor = getattr(task, 'executor', None) or 'cpp'
         
         # 更新字段
         if 'task_name' in kwargs:
@@ -103,6 +200,7 @@ def update_stream_forward_task(task_id: int, **kwargs) -> StreamForwardTask:
             current_device_ids = {d.id for d in task.devices}
             # 获取新的设备ID集合
             new_device_ids = {d.id for d in devices}
+            device_ids_changed = current_device_ids != new_device_ids
             
             # 找出需要删除的设备（在当前关联中但不在新列表中的）
             devices_to_remove = [d for d in task.devices if d.id not in new_device_ids]
@@ -116,6 +214,7 @@ def update_stream_forward_task(task_id: int, **kwargs) -> StreamForwardTask:
             task.devices.extend(devices_to_add)
             
             task.total_streams = len(device_id_list)
+            _maybe_upgrade_nvr_schedule_policy(task, len(device_id_list))
         if 'output_format' in kwargs:
             task.output_format = kwargs['output_format']
         if 'output_quality' in kwargs:
@@ -126,12 +225,34 @@ def update_stream_forward_task(task_id: int, **kwargs) -> StreamForwardTask:
             task.description = kwargs['description']
         if 'is_enabled' in kwargs:
             task.is_enabled = kwargs['is_enabled']
+        if 'schedule_policy' in kwargs:
+            new_policy = kwargs['schedule_policy'] or 'local'
+            schedule_changed = new_policy != previous_schedule
+            task.schedule_policy = new_policy
+        if 'target_node_id' in kwargs:
+            schedule_changed = schedule_changed or kwargs['target_node_id'] != previous_target_node
+            task.target_node_id = kwargs['target_node_id']
+        if 'prefer_gpu' in kwargs:
+            task.prefer_gpu = bool(kwargs['prefer_gpu'])
+        if 'executor' in kwargs:
+            from app.services.runtime_config_service import normalize_executor
+            new_executor = normalize_executor(kwargs['executor'])
+            if new_executor != normalize_executor(previous_executor):
+                schedule_changed = True
+            task.executor = new_executor
+        if 'runtime_bin_path' in kwargs:
+            task.runtime_bin_path = kwargs['runtime_bin_path']
         
         task.updated_at = datetime.utcnow()
         db.session.commit()
         
+        sync_action = None
+        if auto_rebalance and was_enabled and task.is_enabled and (device_ids_changed or schedule_changed):
+            sync_action = 'full_restart' if schedule_changed else 'rebalance'
+            _trigger_deploy_sync(task_id, full_restart=schedule_changed)
+        
         logger.info(f"更新推流转发任务成功: task_id={task_id}")
-        return task
+        return task, sync_action
         
     except Exception as e:
         db.session.rollback()
@@ -287,19 +408,126 @@ def stop_stream_forward_task(task_id: int) -> StreamForwardTask:
 def restart_stream_forward_task(task_id: int) -> StreamForwardTask:
     """重启推流转发任务"""
     try:
-        # 先停止
-        stop_stream_forward_task(task_id)
-        
-        # 再启动
-        start_stream_forward_task(task_id)
-        
         task = StreamForwardTask.query.get_or_404(task_id)
+        if not task.is_enabled:
+            start_stream_forward_task(task_id)
+            task = StreamForwardTask.query.get_or_404(task_id)
+            logger.info(f"重启推流转发任务成功: task_id={task_id}")
+            return task
+
+        from .stream_forward_launcher_service import restart_stream_forward_task_services
+        if not restart_stream_forward_task_services(task_id):
+            raise RuntimeError('重启推流转发服务失败')
+
+        task = StreamForwardTask.query.get_or_404(task_id)
+        task.last_success_time = datetime.utcnow()
+        db.session.commit()
         logger.info(f"重启推流转发任务成功: task_id={task_id}")
         return task
         
     except Exception as e:
+        db.session.rollback()
         logger.error(f"重启推流转发任务失败: {str(e)}", exc_info=True)
         raise
+
+
+def _nvr_stream_forward_marker(nvr_id: int) -> str:
+    return f'{_NVR_STREAM_FORWARD_MARKER_PREFIX}{nvr_id}'
+
+
+def _find_nvr_stream_forward_task(nvr_id: int) -> Optional[StreamForwardTask]:
+    marker = _nvr_stream_forward_marker(nvr_id)
+    return StreamForwardTask.query.filter(
+        StreamForwardTask.description.contains(marker),
+    ).order_by(StreamForwardTask.id.desc()).first()
+
+
+def ensure_nvr_stream_forward_task(nvr_id: int) -> Optional[StreamForwardTask]:
+    """确保 NVR 下属全部 RTSP 挂载通道共用一个推流转发任务，不存在则创建并启动。"""
+    from models import Nvr
+
+    try:
+        nvr = Nvr.query.get(nvr_id)
+        if not nvr:
+            logger.warning(f'NVR {nvr_id} 不存在，无法创建推流转发任务')
+            return None
+
+        devices = Device.query.filter_by(nvr_id=nvr_id).all()
+        device_ids = [
+            d.id for d in devices
+            if d.source
+            and d.source.strip()
+            and not d.source.strip().lower().startswith('gb28181://')
+        ]
+        if not device_ids:
+            logger.info(f'NVR {nvr_id} 下无可推流的 RTSP 通道，跳过推流转发任务')
+            return None
+
+        nvr_label = (nvr.name or nvr.ip or str(nvr_id)).strip()
+        marker = _nvr_stream_forward_marker(nvr_id)
+        description = f'NVR {nvr_label} 下属通道自动推流转发 ({marker})'
+        task = _find_nvr_stream_forward_task(nvr_id)
+        was_running = bool(task and task.is_enabled)
+
+        if task:
+            current_ids = {d.id for d in task.devices}
+            new_ids = set(device_ids)
+            schedule_upgraded = _maybe_upgrade_nvr_schedule_policy(task, len(device_ids))
+            devices_changed = current_ids != new_ids or task.total_streams != len(device_ids)
+            if devices_changed or schedule_upgraded:
+                update_kwargs = {
+                    'description': description,
+                }
+                if devices_changed:
+                    update_kwargs['device_ids'] = device_ids
+                if schedule_upgraded:
+                    update_kwargs['schedule_policy'] = task.schedule_policy
+                task, _ = update_stream_forward_task(
+                    task.id,
+                    auto_rebalance=was_running,
+                    **update_kwargs,
+                )
+                task = StreamForwardTask.query.get(task.id)
+                if was_running:
+                    logger.info(
+                        f'已更新并同步 NVR 推流转发部署: nvr_id={nvr_id}, task_id={task.id}, '
+                        f'channels={len(device_ids)}, schedule={task.schedule_policy}',
+                    )
+            elif was_running:
+                logger.info(
+                    f'NVR 推流转发任务无设备/策略变化，跳过重平衡: nvr_id={nvr_id}, task_id={task.id}',
+                )
+            else:
+                try:
+                    start_stream_forward_task(task.id)
+                    logger.info(f'已补启动已停止的 NVR 推流转发任务: nvr_id={nvr_id}, task_id={task.id}')
+                except Exception as e:
+                    logger.warning(f'补启动 NVR 推流转发任务失败: nvr_id={nvr_id}, task_id={task.id}, error={e}')
+            return task
+
+        task_name = f'{nvr_label}-推流转发'
+        schedule_policy = _default_schedule_policy(len(device_ids), is_nvr=True)
+        task = create_stream_forward_task(
+            task_name=task_name,
+            device_ids=device_ids,
+            output_format='rtmp',
+            output_quality='high',
+            description=description,
+            is_enabled=False,
+            schedule_policy=schedule_policy,
+            executor='cpp',
+        )
+        try:
+            start_stream_forward_task(task.id)
+            logger.info(
+                f'为 NVR {nvr_id} 创建并启动推流转发任务: task_id={task.id}, channels={len(device_ids)}',
+            )
+        except Exception as e:
+            logger.warning(f'NVR 推流转发任务创建成功但启动失败: task_id={task.id}, error={e}')
+        return task
+    except Exception as e:
+        logger.error(f'为 NVR {nvr_id} 确保推流转发任务失败: {e}', exc_info=True)
+        return None
 
 
 def ensure_device_stream_forward_task(device_id: str) -> Optional[StreamForwardTask]:
@@ -323,10 +551,25 @@ def ensure_device_stream_forward_task(device_id: str) -> Optional[StreamForwardT
             StreamForwardTask.devices.any(Device.id == device_id)
         ).all()
         
-        # 如果已经存在任务，直接返回第一个任务
         if existing_tasks:
-            logger.info(f"设备 {device_id} 已存在于推流转发任务中，任务ID: {existing_tasks[0].id}")
-            return existing_tasks[0]
+            running = [t for t in existing_tasks if t.is_enabled]
+            nvr_tasks = [t for t in existing_tasks if _is_nvr_stream_forward_task(t)]
+            task = (running[0] if running else None) or (nvr_tasks[0] if nvr_tasks else existing_tasks[0])
+            if not task.is_enabled:
+                try:
+                    start_stream_forward_task(task.id)
+                    logger.info(
+                        '设备 %s 已有推流转发任务 %s，已补启动',
+                        device_id, task.id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        '设备 %s 已有推流转发任务 %s，补启动失败: %s',
+                        device_id, task.id, e,
+                    )
+            else:
+                logger.info(f"设备 {device_id} 已存在于推流转发任务中，任务ID: {task.id}")
+            return task
         
         # 注意：不再检查设备冲突，因为推流转发任务使用rtmp_stream，算法任务使用ai_rtmp，它们使用不同的流地址，可以同时使用
         
@@ -338,7 +581,8 @@ def ensure_device_stream_forward_task(device_id: str) -> Optional[StreamForwardT
             output_format='rtmp',
             output_quality='high',
             description=f"为设备 {device.name or device_id} 自动创建的推流转发任务",
-            is_enabled=False  # 先创建，稍后启动
+            is_enabled=False,  # 先创建，稍后启动
+            executor='cpp',
         )
         
         # 启动任务

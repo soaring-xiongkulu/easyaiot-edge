@@ -14,7 +14,9 @@ from app.services.record_space_service import (
     get_record_space, list_record_spaces, get_record_space_by_device_id, sync_spaces_to_minio
 )
 from app.services.record_video_service import (
-    list_record_videos, delete_record_videos, get_record_video, cleanup_old_videos_by_days
+    list_record_videos, delete_record_videos, get_record_video, cleanup_old_videos_by_save_time,
+    sync_record_videos_metadata, list_record_video_dates, list_record_videos_day_detail,
+    find_segment_for_alert,
 )
 
 record_bp = Blueprint('record', __name__)
@@ -29,13 +31,19 @@ def list_spaces():
         page_no = int(request.args.get('pageNo', 1))
         page_size = int(request.args.get('pageSize', 10))
         search = request.args.get('search', '').strip() or None
-        
-        result = list_record_spaces(page_no, page_size, search)
+        parent_key = request.args.get('parentKey', 'root').strip() or 'root'
+        scope = request.args.get('scope', '').strip() or None
+
+        result = list_record_spaces(page_no, page_size, search, parent_key, scope)
         return jsonify({
             'code': 0,
             'msg': 'success',
             'data': result['items'],
-            'total': result['total']
+            'total': result['total'],
+            'parent_key': result.get('parent_key', 'root'),
+            'breadcrumbs': result.get('breadcrumbs', []),
+            'is_search': result.get('is_search', False),
+            'scope': result.get('scope'),
         })
     except ValueError as e:
         return jsonify({'code': 400, 'msg': str(e)}), 400
@@ -101,9 +109,15 @@ def update_space(space_id):
         space_name = data.get('space_name', '').strip() if 'space_name' in data else None
         save_mode = data.get('save_mode') if 'save_mode' in data else None
         save_time = data.get('save_time') if 'save_time' in data else None
+        save_time_custom = data.get('save_time_custom') if 'save_time_custom' in data else None
         description = data.get('description', '').strip() if 'description' in data else None
         
-        space = update_record_space(space_id, space_name, save_mode, save_time, description)
+        try:
+            space = update_record_space(
+                space_id, space_name, save_mode, save_time, description, save_time_custom,
+            )
+        except ValueError as ve:
+            return jsonify({'code': 400, 'msg': str(ve)}), 400
         return jsonify({
             'code': 0,
             'msg': '监控录像空间更新成功',
@@ -113,6 +127,39 @@ def update_space(space_id):
         return jsonify({'code': 500, 'msg': str(e)}), 500
     except Exception as e:
         logger.error(f'更新监控录像空间失败: {str(e)}', exc_info=True)
+        db.session.rollback()
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
+
+
+@record_bp.route('/space/group-policy', methods=['PUT'])
+def update_group_policy():
+    """更新 NVR / GB28181 分组默认录像保存时间，联动非自定义子设备。"""
+    try:
+        data = request.get_json() or {}
+        group_type = (data.get('group_type') or '').strip().lower()
+        group_key = str(data.get('group_key') or '').strip()
+        save_time = data.get('save_time')
+        if save_time is None:
+            return jsonify({'code': 400, 'msg': 'save_time 不能为空'}), 400
+
+        from app.services.space_group_save_time_service import update_group_save_time
+        from app.services.space_save_time_service import SPACE_KIND_RECORD
+
+        policy, updated = update_group_save_time(group_type, group_key, SPACE_KIND_RECORD, save_time)
+        return jsonify({
+            'code': 0,
+            'msg': f'分组存储策略已更新，已同步 {updated} 个非自定义设备空间',
+            'data': {
+                'group_type': policy.group_type,
+                'group_key': policy.group_key,
+                'save_time': policy.record_save_time,
+                'updated_count': updated,
+            },
+        })
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'更新分组录像存储策略失败: {str(e)}', exc_info=True)
         db.session.rollback()
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
@@ -154,6 +201,65 @@ def sync_spaces_minio():
 
 
 # ====================== 监控录像管理接口 ======================
+@record_bp.route('/space/<int:space_id>/videos/dates', methods=['GET'])
+def list_video_dates(space_id):
+    """列出有录像的日期"""
+    try:
+        device_id = request.args.get('device_id')
+        dates = list_record_video_dates(space_id, device_id)
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': dates,
+        })
+    except Exception as e:
+        logger.error(f'获取录像日期列表失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
+
+
+@record_bp.route('/space/<int:space_id>/videos/day', methods=['GET'])
+def list_videos_by_day(space_id):
+    """获取指定日期的录像片段详情（含时间轴与告警关联）"""
+    try:
+        date_str = request.args.get('date', '').strip()
+        if not date_str:
+            return jsonify({'code': 400, 'msg': 'date 参数不能为空（格式 YYYY-MM-DD）'}), 400
+        device_id = request.args.get('device_id')
+        result = list_record_videos_day_detail(space_id, date_str, device_id)
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': result,
+        })
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'获取日录像详情失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
+
+
+@record_bp.route('/space/device/<device_id>/resolve-alert', methods=['GET'])
+def resolve_alert_segment(device_id):
+    """根据告警 ID 定位录像片段（供告警页跳转回放）"""
+    try:
+        alert_id = request.args.get('alert_id') or request.args.get('alertId')
+        if not alert_id:
+            return jsonify({'code': 400, 'msg': 'alert_id 参数不能为空'}), 400
+        result = find_segment_for_alert(device_id, int(alert_id))
+        if not result:
+            return jsonify({'code': 404, 'msg': '未找到告警或关联录像空间'}), 404
+        return jsonify({
+            'code': 0,
+            'msg': 'success',
+            'data': result,
+        })
+    except ValueError as e:
+        return jsonify({'code': 400, 'msg': str(e)}), 400
+    except Exception as e:
+        logger.error(f'定位告警录像片段失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
+
+
 @record_bp.route('/space/<int:space_id>/videos', methods=['GET'])
 def list_videos(space_id):
     """获取监控录像列表"""
@@ -161,8 +267,15 @@ def list_videos(space_id):
         device_id = request.args.get('device_id')
         page_no = int(request.args.get('pageNo', 1))
         page_size = int(request.args.get('pageSize', 20))
-        
-        result = list_record_videos(space_id, device_id, page_no, page_size)
+        search = request.args.get('search', '').strip() or None
+        start_time = request.args.get('startTime')
+        end_time = request.args.get('endTime')
+
+        from datetime import datetime
+        start_dt = datetime.fromisoformat(start_time) if start_time else None
+        end_dt = datetime.fromisoformat(end_time) if end_time else None
+
+        result = list_record_videos(space_id, device_id, page_no, page_size, search, start_dt, end_dt)
         return jsonify({
             'code': 0,
             'msg': 'success',
@@ -222,19 +335,36 @@ def delete_videos(space_id):
         return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
 
 
+@record_bp.route('/space/<int:space_id>/videos/sync', methods=['POST'])
+def sync_videos_metadata(space_id):
+    """从 MinIO 同步录像元数据到数据库（历史数据回填）"""
+    try:
+        result = sync_record_videos_metadata(space_id)
+        return jsonify({
+            'code': 0,
+            'msg': '同步完成',
+            'data': result
+        })
+    except RuntimeError as e:
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+    except Exception as e:
+        logger.error(f'同步录像元数据失败: {str(e)}', exc_info=True)
+        return jsonify({'code': 500, 'msg': f'服务器内部错误: {str(e)}'}), 500
+
+
 @record_bp.route('/space/<int:space_id>/videos/cleanup', methods=['POST'])
 def cleanup_videos(space_id):
     """清理过期的监控录像"""
     try:
         data = request.get_json()
-        if not data or 'days' not in data:
-            return jsonify({'code': 400, 'msg': '请求数据不能为空，需要提供 days 参数'}), 400
-        
-        days = int(data.get('days', 0))
-        if days < 0:
-            return jsonify({'code': 400, 'msg': 'days 必须大于等于0'}), 400
-        
-        result = cleanup_old_videos_by_days(space_id, days)
+        if not data or 'save_time_hours' not in data:
+            return jsonify({'code': 400, 'msg': '请求数据不能为空，需要提供 save_time_hours 参数'}), 400
+
+        save_time_hours = int(data.get('save_time_hours', 0))
+        if save_time_hours <= 0:
+            return jsonify({'code': 400, 'msg': 'save_time_hours 必须大于 0'}), 400
+
+        result = cleanup_old_videos_by_save_time(space_id, save_time_hours)
         return jsonify({
             'code': 0,
             'msg': '清理完成',

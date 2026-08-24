@@ -18,10 +18,11 @@ from urllib.parse import quote
 from flask import current_app
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
+from minio import Minio
+from minio.error import S3Error
 
 from models import db, Alert
 from app.services.minio_service import ModelService
-from app.services.local_bucket_client import StorageObjectError
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +155,8 @@ def delete_all_alert_images_from_minio():
         logger.info(f"已删除MinIO告警图片存储桶下的所有图片，共 {deleted_count} 张，将在 {_minio_cleanup_wait_seconds} 秒内跳过所有上传请求")
         return deleted_count
         
-    except StorageObjectError as e:
-        logger.error(f"删除告警图片失败: {str(e)}")
+    except S3Error as e:
+        logger.error(f"删除MinIO告警图片失败（S3Error）: {str(e)}")
         return 0
     except Exception as e:
         logger.error(f"删除MinIO告警图片失败: {str(e)}", exc_info=True)
@@ -327,9 +328,16 @@ def upload_image_to_minio(image_path: str, alert_id: int, device_id: str) -> Opt
         download_url = f"/api/v1/buckets/{bucket_name}/objects/download?prefix={quote(object_name, safe='')}"
         return download_url
         
-    except StorageObjectError as e:
+    except S3Error as e:
         error_msg = str(e)
-        logger.error(f"告警图片上传错误: {error_msg}")
+        logger.error(f"MinIO上传错误: {error_msg}")
+        
+        # 检查是否是 "stream having not enough data" 错误
+        if "stream having not enough data" in error_msg.lower():
+            logger.warning(f"检测到MinIO数据流错误，将删除alert-images存储桶下的所有图片")
+            deleted_count = delete_all_alert_images_from_minio()
+            logger.info(f"已清理告警图片存储桶，删除了 {deleted_count} 张图片")
+        
         return None
     except Exception as e:
         error_msg = str(e)
@@ -385,39 +393,64 @@ def process_alert_message(message: Dict):
             logger.warning(f"告警消息缺少ID字段: {message}")
             return
         
-        # 如果没有图片路径，跳过图片上传
+        # 如果没有图片路径，跳过处理
         if not image_path:
-            logger.debug(f"告警 {alert_id} 没有图片路径，跳过图片上传")
+            logger.debug(f"告警 {alert_id} 没有图片路径，跳过图片处理")
             return
-        
-        # 检查是否在清空后的等待期内（在数据库查询前检查，避免不必要的数据库操作）
-        with _minio_cleanup_lock:
-            if _last_minio_cleanup_time > 0:
-                current_time = time.time()
-                elapsed = current_time - _last_minio_cleanup_time
-                if elapsed < _minio_cleanup_wait_seconds:
-                    wait_remaining = _minio_cleanup_wait_seconds - elapsed
-                    logger.debug(f"告警 {alert_id} 图片上传跳过：MinIO清空后等待期内（还需等待 {wait_remaining:.1f} 秒）")
-                    return
-        
-        # 上传图片到MinIO（如果不在等待期内）
-        minio_path = upload_image_to_minio(image_path, alert_id, device_id)
-        
-        if minio_path:
-            # 在Flask应用上下文中执行数据库操作
+
+        # mini 形态：不启用 MinIO，直接使用本地路径作为 image_url
+        is_mini = False
+        try:
+            from app.utils.service_urls import is_mini_deploy_profile
+
+            is_mini = is_mini_deploy_profile()
+        except Exception:
+            is_mini = False
+
+        if is_mini:
             with current_app.app_context():
-                # 查询告警记录（告警记录已经在alert_hook_service中先插入数据库）
+                from app.utils.service_urls import build_alert_image_api_url
+
                 alert = Alert.query.get(alert_id)
                 if not alert:
                     logger.warning(f"告警记录不存在: alert_id={alert_id}")
                     return
-                
-                # 更新数据库中的image_path
-                alert.image_path = minio_path
+
+                alert.image_url = build_alert_image_api_url(image_path)
                 db.session.commit()
-                logger.debug(f"告警 {alert_id} 图片路径已更新: {minio_path}")
+                logger.debug(f"mini 形态：告警 {alert_id} image_url 使用本地路径: {alert.image_url}")
         else:
-            logger.warning(f"告警 {alert_id} 图片上传失败，保留原始路径: {image_path}")
+            # 非 mini：保持原有 MinIO 上传逻辑
+            # 检查是否在清空后的等待期内（在数据库查询前检查，避免不必要的数据库操作）
+            with _minio_cleanup_lock:
+                if _last_minio_cleanup_time > 0:
+                    current_time = time.time()
+                    elapsed = current_time - _last_minio_cleanup_time
+                    if elapsed < _minio_cleanup_wait_seconds:
+                        wait_remaining = _minio_cleanup_wait_seconds - elapsed
+                        logger.debug(
+                            f"告警 {alert_id} 图片上传跳过：MinIO清空后等待期内（还需等待 {wait_remaining:.1f} 秒）"
+                        )
+                        return
+
+            # 上传图片到MinIO（如果不在等待期内）
+            minio_path = upload_image_to_minio(image_path, alert_id, device_id)
+
+            if minio_path:
+                # 在Flask应用上下文中执行数据库操作
+                with current_app.app_context():
+                    # 查询告警记录（告警记录已经在alert_hook_service中先插入数据库）
+                    alert = Alert.query.get(alert_id)
+                    if not alert:
+                        logger.warning(f"告警记录不存在: alert_id={alert_id}")
+                        return
+
+                    # MinIO 下载地址写入 image_url（与 iot-sink、告警列表 API 一致）
+                    alert.image_url = minio_path
+                    db.session.commit()
+                    logger.debug(f"告警 {alert_id} image_url 已更新: {minio_path}")
+            else:
+                logger.warning(f"告警 {alert_id} 图片上传失败，保留原始路径: {image_path}")
                 
     except Exception as e:
         logger.error(f"处理告警消息失败: {str(e)}", exc_info=True)
