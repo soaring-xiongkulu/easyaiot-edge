@@ -79,9 +79,18 @@ WEB/conf/_app.config.js
 # 部署期运行时数据目录（deploy/）
 /deploy/db_data/
 /deploy/redis_data/
+/deploy/milvus_data/
+/deploy/minio_data/
 /deploy/srs_data/*
 !/deploy/srs_data/conf/
 !/deploy/srs_data/conf/**
 # WEB 预构建产物（部署时由 CI/脚本生成）
 /WEB/dist-prebuilt/
 /WEB/dist-prebuilt-edge/
+
+# VIDEO 运行时生成数据（人脸抓拍图、运行时模型缓存）
+VIDEO/data/face_images/
+VIDEO/data/models/
+
+# VIDEO 运行时自动生成的转发任务配置（模板见 forward.example.ini）
+RUNTIME/config/forward_task_*.ini
