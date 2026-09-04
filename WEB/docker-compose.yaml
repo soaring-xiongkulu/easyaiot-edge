@@ -13,6 +13,8 @@ services:
       - "${WEB_PORT:-8888}:443"
       # SITE 官网（nginx 内 listen 8090）
       - "${SITE_PORT:-8090}:8090"
+      # 明文 HTTP（本地浏览器直访/健康检查用；nginx.edge.conf 主 server 已 listen 80）
+      - "${WEB_HTTP_PORT:-8088}:80"
 
     # 数据卷挂载
     volumes:
