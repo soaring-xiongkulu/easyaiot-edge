@@ -1,3 +1,25 @@
+<h1 align="center">📢 项目迁移通告</h1>
+
+<div align="center">
+
+<h3>⚠️ EasyAIoT Edge 已停止维护</h3>
+
+<p>本仓库不再进行功能更新、问题修复与版本发布，代码仅作存档保留。</p>
+
+<hr>
+
+<h3>📍 请前往新项目</h3>
+
+<p>EasyAIoT 的后续开发与维护已全部迁移至新仓库：</p>
+
+<p>👉 <a href="https://gitee.com/volara/easyaiot"><strong>https://gitee.com/volara/easyaiot</strong></a></p>
+
+<p>最新功能、镜像与部署文档请以新仓库为准，欢迎 Star、Fork 与反馈。</p>
+
+</div>
+
+---
+
 # EasyAIoT Edge（异构边缘算力平台）
 
 [![Gitee star](https://gitee.com/volara/easyaiot-edge/badge/star.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/stargazers)

@@ -1,3 +1,25 @@
+<h1 align="center">📢 Project Migration Notice</h1>
+
+<div align="center">
+
+<h3>⚠️ EasyAIoT Edge is no longer maintained</h3>
+
+<p>This repository receives no further feature updates, bug fixes, or releases. The code is kept for archival purposes only.</p>
+
+<hr>
+
+<h3>📍 Please use the new project</h3>
+
+<p>All ongoing development and maintenance of EasyAIoT have moved to the new repository:</p>
+
+<p>👉 <a href="https://gitee.com/volara/easyaiot"><strong>https://gitee.com/volara/easyaiot</strong></a></p>
+
+<p>For the latest features, images, and deployment documentation, please refer to the new repository. Stars, forks, and feedback are welcome.</p>
+
+</div>
+
+---
+
 # EasyAIoT Edge (Heterogeneous Edge Computing Platform)
 
 [![Gitee star](https://gitee.com/volara/easyaiot-edge/badge/star.svg)](https://gitee.com/soaring-xiongkulu/easyaiot-edge/stargazers)
